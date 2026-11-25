@@ -124,17 +124,33 @@ phone (display, touch, Wi-Fi, modem, audio out work; GPU renders but hangs under
 
 ### Next steps
 
-1. Check the outcome of the v2 + erased-dtbo test (re-run it: flash `boot_b`, `fastboot erase dtbo_b`,
-   `fastboot set_active b`, reboot, watch `lsusb` for `18d1:d001` = pmOS initramfs USB gadget).
-2. Rebuild the kernel package (pkgrel 1 adds patches 0002/0003, `QCOM_WDT=y`, `EFI_ZBOOT` off so a raw
-   `Image` is produced and installed as `/boot/Image`, `LOCALVERSION=-sm6150`). That build was interrupted.
-   The earlier build used `EFI_ZBOOT`; ABL needs the raw `Image` (unwrap a zboot image by reading the payload
-   offset/size at bytes 8-15 and decompressing the zstd payload).
+1. Boot-test the header v2 image (see "Packaging the v2 boot image" below): flash `boot_b`,
+   `fastboot erase dtbo_b`, `fastboot set_active b`, reboot, watch `lsusb` for `18d1:d001` (pmOS initramfs
+   USB gadget) and SSH. If it fails, retry with `RAMDISK_OFFSET=0x4000000 DTB_OFFSET=0x3f00000`
+   (the 30 MB Image is larger than violet's 16 MB kernel-to-ramdisk gap; violet boots anyway, so ABL may relocate).
+2. The kernel package is rebuilt (`7.4_rc4-r1`, 2026-11-26 01:11): patches 0002/0003, `QCOM_WDT=y`,
+   `EFI_ZBOOT` off, raw `Image` installed as `/boot/Image`, `LOCALVERSION=-sm6150`. Its DTB has board-id
+   `0 0`; `mk-bootimg-v2.sh` patches in `0x22` when packing.
 3. If it still resets early, diff our DTS against violet's `dt/violet-sm6150.dts` (same SoC: compare
    reserved-memory, `protected-clocks`, disabled nodes) and their kernel config.
 4. Once it boots: SSH, then DSI panel driver (generate from the stock panel node with
    linux-mdss-dsi-panel-driver-generator), GPU with `a612_zap.*`/`a612_rgmu.bin`/`a630_sqe.fw`, Mesa,
    KWin 6, Finder. Then touch, charging (PM6150 SMB5/QG is weak upstream), audio, Wi-Fi, modem.
+
+## Packaging the v2 boot image
+
+`mainline/mk-bootimg-v2.sh <Image> <dtb> <ramdisk> [out.img]` with `PMOS_BOOT_UUID`/`PMOS_ROOT_UUID` set
+(read them from the phone's `/proc/cmdline`; they change with every `pmbootstrap install`). Inputs:
+
+- `Image`, `dtb`: from the kernel package (`/boot/Image`, `/boot/dtbs/qcom/sm6150-xiaomi-mojito.dtb`).
+- `ramdisk`: for now the **downstream** pmOS initramfs, unpacked from the downstream `vendor_boot.img`
+  (`unpack_bootimg --boot_img vendor_boot.img --out vb` gives `vb/vendor_ramdisk`). It is kernel-agnostic
+  (gzip, contains the 4K loop hook); the mainline drivers it needs are built in. No mainline device package yet.
+- `MKBOOTIMG`: android-tools' `mkbootimg` (a Python script; the copy inside pmbootstrap's rootfs chroot works
+  with `python3`).
+
+`vendor_boot_b` still holds an older v3 mainline image; with a v2 `boot` image ABL is expected to ignore it
+(not verified).
 
 ## Layout
 
@@ -147,6 +163,7 @@ phone (display, touch, Wi-Fi, modem, audio out work; GPU renders but hangs under
 | `downstream/README.md` | step-by-step notes for the downstream port |
 | `mainline/sm6150-xiaomi-mojito.dts` | board device tree (authoritative copy) |
 | `mainline/linux-postmarketos-qcom-sm6150` | mainline kernel package + patches |
+| `mainline/mk-bootimg-v2.sh` | packs the header v2 boot.img (see above) |
 | `mainline/dummy-overlay.dts` | the dtbo experiment (ABL rejected it) |
 | `mainline/NOTES.md` | facts pulled from the stock device tree |
 | `tools/` | lpunpack.py (super.img), hwprobe.sh, evrec.py, vtype.py |
