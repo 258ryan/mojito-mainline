@@ -457,3 +457,91 @@
 &aggre1_noc {
 	/delete-property/ clocks;
 };
+
+/*
+ * Adreno 612. Needs msm.ko loaded with separate_gpu_kms=1 while no display subsystem is enabled (the
+ * display stays on simpledrm), which gives a render-only DRM device. Firmware: a630_sqe.fw and a612_rgmu.bin
+ * are found through /lib/firmware/qcom (symlinks to /lib/firmware/postmarketos/, left by the downstream
+ * install). The zap shader is signed for this phone by the vendor, so it must come from the stock firmware:
+ * the split a612_zap.mdt + .b00-.b02 already in /lib/firmware/postmarketos/.
+ */
+&gpu {
+	status = "okay";
+};
+
+&gpu_zap_shader {
+	firmware-name = "postmarketos/a612_zap.mdt";
+};
+
+/*
+ * Touchscreen: FocalTech FT5452 on i2c1 (QUP0 SE1, gpio4/gpio5) at 0x38. Identified by reading its chip-id
+ * registers from userspace: 0xa3 = 0x54 and 0x9f = 0x52 (chip id 0x5452); nothing answers at 0x48, so the
+ * Himax variant listed in the stock tree is not fitted. The driver is edt-ft5x06 (CONFIG_TOUCHSCREEN_EDT_FT5X06).
+ * Power: the analog supply is a plain GPIO (gpio96) in the stock tree, so it is a fixed regulator here, and the
+ * I/O rail is pm6150 ldo13 (1.8 V). Reset is gpio88 (active low), the interrupt gpio89 (falling edge). All of
+ * these pins are outside the secure-world set reserved above.
+ */
+&gpi_dma0 {
+	status = "okay";
+};
+
+&qupv3_id_0 {
+	status = "okay";
+};
+
+&tlmm {
+	ts_int_default: ts-int-default-state {
+		pins = "gpio89";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-pull-up;
+		input-enable;
+	};
+
+	ts_reset_default: ts-reset-default-state {
+		pins = "gpio88";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+	};
+
+	ts_avdd_default: ts-avdd-default-state {
+		pins = "gpio96";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+	};
+};
+
+/ {
+	ts_avdd: regulator-ts-avdd {
+		compatible = "regulator-fixed";
+		regulator-name = "ts_avdd";
+		/* the stock tree gives no voltage for this GPIO-switched rail; fixed regulators need a nominal one */
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		gpio = <&tlmm 96 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		pinctrl-0 = <&ts_avdd_default>;
+		pinctrl-names = "default";
+	};
+};
+
+&i2c1 {
+	clock-frequency = <400000>;
+	status = "okay";
+
+	touchscreen@38 {
+		compatible = "focaltech,ft5452";
+		reg = <0x38>;
+		interrupt-parent = <&tlmm>;
+		interrupts = <89 IRQ_TYPE_EDGE_FALLING>;
+		reset-gpios = <&tlmm 88 GPIO_ACTIVE_LOW>;
+		vcc-supply = <&ts_avdd>;
+		iovcc-supply = <&vreg_l13a>;
+		pinctrl-0 = <&ts_int_default>, <&ts_reset_default>;
+		pinctrl-names = "default";
+		touchscreen-size-x = <1080>;
+		touchscreen-size-y = <2400>;
+	};
+};

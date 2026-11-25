@@ -92,12 +92,13 @@ simple-framebuffer on the bootloader splash at `0x9c000000`, Xiaomi carveouts (i
 same layout as the stock kernel. The kernel package is `mainline/linux-postmarketos-qcom-sm6150`
 (config started from pmaports' sm7150 config, plus the SM6150 symbols `PINCTRL_QCS615`, `QCS_GCC_615`, ...).
 
-### Status (2026-11-26): mainline boots to SSH, the pin controller works (115 usable GPIOs), splash login shows
+### Status (2026-11-26): mainline boots to SSH; pin controller (115 GPIOs), splash login and the Adreno GPU work
 
 Linux `7.4.0-rc4-sm6150` boots from a header v2 `boot.img` (see "Packaging the v2 boot image"; `dtbo_b` erased) to
 the pmOS rootfs on slot B and answers on SSH over USB. UFS, the USB gadget, the watchdog, the TLMM pin controller
-and simpledrm all probe; the log has no oops; the splash display and the kmscon login work. Open: nothing else (GPU,
-touch, audio, Wi-Fi, modem) is brought up yet. Eight GPIOs are secure-world owned and reserved in the DTS (see TLMM).
+and simpledrm all probe; the log has no oops; the splash display and the kmscon login work; and the **Adreno 612
+renders** (freedreno, OpenGL ES 3.2, off-screen test passes). Open: a real display driver (DPU/DSI/panel), touch,
+audio, Wi-Fi, modem, charging. Eight GPIOs are secure-world owned and reserved in the DTS (see TLMM).
 
 Results of the v2 boots, in the order they were tried (details in the sections below):
 
@@ -150,6 +151,67 @@ loaded at 11 s and 180 s) before the log's `OK` lines gave the real list. Always
 - Register addresses: pin `n` is at tile base + `0x1000 * n` with EAST `0x3100000`, WEST `0x3500000`, SOUTH
   `0x3d00000` (same as the downstream driver's `0x3000000 + {0x100000, 0x500000, 0xd00000}`).
 - A kernel oops in a probe running in `deferred_probe_work_func` leaves the system stuck rather than rebooting.
+
+### GPU: the Adreno 612 renders (freedreno, render node)
+
+`tools/gltest.py` (copy it to the phone and run it as a normal user) opens `/dev/dri/renderD128` through GBM, makes a
+surfaceless OpenGL ES context and draws a shader triangle into an FBO, then reads pixels back. Result: `GL_RENDERER
+FD612`, `OpenGL ES 3.2 Mesa 26.3.1`, clear and triangle tests PASS, no kernel error. What it took:
+
+1. **DTS:** `&gpu { status = "okay"; }` and `&gpu_zap_shader { firmware-name = "postmarketos/a612_zap.mdt"; }`. The
+   `gmu` node needs nothing: for the 612 the GMU is the "GMU wrapper" (`a6xx_gmuwrapper_funcs`), handled inside the
+   GPU driver, so `506d000.gmu` staying unbound is normal. `mdss`/`dsi` stay disabled (the display is simpledrm).
+2. **Firmware** (all already on the phone from the downstream install, in `/lib/firmware/postmarketos/`): `a612_zap.mdt`
+   plus `.b00-.b02` (signed for this phone by the vendor, cannot come from linux-firmware), `a612_rgmu.bin`,
+   `a630_sqe.fw`. The driver looks in `qcom/`, so: `mkdir /lib/firmware/qcom` and symlink the last two into it
+   (`ln -s ../postmarketos/a630_sqe.fw /lib/firmware/qcom/`). The zap path is the full DT `firmware-name` above.
+3. **Modules:** `DRM_MSM=m`, so the r4 package's module tree must be on the rootfs: unpack
+   `usr/lib/modules/7.4.0-rc4-sm6150` from the apk into `/lib/modules/` and run `depmod -a 7.4.0-rc4-sm6150` (17 MB,
+   852 modules; the phone's kmod reads the `.ko.zst` files).
+4. **`/etc/modprobe.d/msm.conf`: `options msm separate_gpu_kms=1`.** With one GPU and no display subsystem the driver's
+   default (`-1`, auto) picks "single card" and the GPU waits forever for a display master, with no log line at all.
+   You get a bound `adreno` driver, no `renderD128`, nothing deferred.
+
+**Traps hit while bringing it up.**
+- udev **auto-loads `msm` at boot** as soon as the modules are installed (the GPU node's modalias), before any
+  `modprobe msm separate_gpu_kms=1` you type; `modprobe` of an already-loaded module is a silent no-op that returns 0.
+  Always read `/sys/module/msm/parameters/separate_gpu_kms`.
+- **`rmmod msm` oopses** in `adreno_remove` when the GPU bound through the plain component path (NULL drvdata). Do not
+  try to reload it; set the option file and reboot.
+- `evdev` is `=m` as well: without it there is no `/dev/input/event*` (`modprobe evdev`, or build it in).
+- The firmware loads lazily, at the first open of the DRM device (about 8 s after boot); it then initialises the
+  hardware, which includes the zap shader, so `gpu hw init failed` in `dmesg` is the line to look for.
+
+### Phosh runs (phoc renders on the Adreno, scanout on simpledrm)
+
+`tools/run-phosh.sh` (run as root on the phone, from SSH) starts Phosh 0.59 for 45 s: `phoc` renders on
+`/dev/dri/renderD128` (GLES2, `GL renderer: FD612`) and presents on the simpledrm card `/dev/dri/card0` (XR24 linear
+buffers, atomic modeset 1080x2400 @ 60 Hz, wlroots multi-GPU copy). The shell, `gnome-session`, squeekboard, polkitd and
+at-spi all come up and stay up. The only input is the volume key (`gpio-keys`) until touch works.
+
+- **Packages, with no internet on the phone.** On the PC: build a scratch apk root from the phone's
+  `/lib/apk/db/installed` and `/etc/apk/world`, then `apk.static --root R --arch aarch64 --repositories-file repos
+  --allow-untrusted add --simulate phosh phoc` lists what is missing (350 packages, 210 MiB, no upgrades; repos are the
+  three on the phone: postmarketos main, alpine edge main and community). `apk fetch -o repo/aarch64 <names>`, then
+  `apk mkndx --allow-untrusted -o Packages.adb *.apk` (an apk 3 index must be called `Packages.adb`),
+  `python3 -m http.server 8000 --bind 172.16.42.2 --directory repo`, and on the phone
+  `apk --repositories-file F --allow-untrusted add phoc phosh seatd seatd-openrc` with `F` containing
+  `http://172.16.42.2:8000/aarch64/Packages.adb`. Nothing is added to any OpenRC runlevel (diff `rc-update show -v`
+  before and after). The rootfs is shared with slot A.
+- **Traps.** `libseat` in Alpine has no `builtin` backend, so install `seatd` and use `LIBSEAT_BACKEND=seatd`. `phoc`
+  stalls silently before it looks at the display unless there is a D-Bus session bus (`phosh-session` uses
+  `dbus-run-session`). `kmscon-console` must be stopped first (it holds DRM master on card0). Set
+  `WLR_LIBINPUT_NO_DEVICES=1` while there is no touchscreen.
+
+### Touch: FocalTech FT5452 identified, driver and node prepared (not built or tested yet)
+
+The stock tree lists a FocalTech node and a Himax node on `i2c@884000` (our `i2c1`, `gpio4`/`gpio5`). Reading the bus
+from userspace (`tools/i2cprobe.py`, with the IC powered and reset released by a test DTB) showed **0x38 ACKs with chip id
+`0xa3=0x54, 0x9f=0x52` = FT5452**, and 0x48 (Himax) does not answer. Reset is gpio88 (active low), interrupt gpio89
+(falling edge), the analog supply is gpio96 (a fixed regulator here) and the I/O rail is `vreg_l13a`; none of these pins is
+in the reserved set. The DTS has the node (`focaltech,ft5452`, 1080x2400), `gpi_dma0` and `qupv3_id_0` enabled, and the
+config has `TOUCHSCREEN_EDT_FT5X06=y` and `INPUT_EVDEV=y` (package r5). **None of this has been built or booted yet**; the
+test is that a touch input device appears in `/dev/input` and reports events (`tools/evrec.py`).
 
 ### Display: the bootloader splash now stays up (simpledrm), login visible
 
@@ -231,14 +293,13 @@ phone (display, touch, Wi-Fi, modem, audio out work; GPU renders but hangs under
 
 ### Next steps
 
-1. **GPU does not need pins**, so it can proceed independently of the pin work: extract `a612_zap.*`, `a612_rgmu.bin`
-   and `a630_sqe.fw` from the stock ROM (`tools/lpunpack.py`, on the phone only), enable `&gpu` and `&gmu` in the
-   DTS, load `msm.ko` (`DRM_MSM=m`) and look for `/dev/dri/renderD128`. Note that `msm.ko` also owns the display
-   and will take over from simpledrm.
+1. **GPU: done for off-screen rendering** (see above). Remaining: a KMS output for a compositor (item 2), and Vulkan
+   (turnip) if wanted. `kmscube`, `eglinfo`, `phoc` and `phosh` are not installed and the phone has no internet; fetch the
+   apks on the PC (`pmbootstrap` or the edge mirror) and serve them over the USB link.
 2. **Display** through the real stack (the splash already works, see above): DPU, DSI host and PHY, and a DSI panel
    driver (generate it from the stock panel node with linux-mdss-dsi-panel-driver-generator).
-3. **Pins:** TLMM works (115 usable GPIOs). Next consumers need only a pinctrl state or a `gpios` property on a
-   pin outside gpio0-3 / gpio6-9: panel reset/TE, touch (FocalTech `fts_ts`) and its I2C/SPI bus, then charging
+3. **Touch first** (prepared, see above): build r5, flash, check the input device, then try Phosh with a finger. After
+   that, with TLMM working and any pin outside gpio0-3 / gpio6-9 usable: panel reset/TE, charging
    (PM6150 SMB5/QG is weak upstream), audio, Wi-Fi, modem, and finally KWin 6 and Finder.
 4. The kernel package (`7.4_rc4-r4`): patches 0001-0003, `QCOM_WDT=y`, `EFI_ZBOOT` off, raw `Image` installed as
    `/boot/Image`, `LOCALVERSION=-sm6150`, and `DRM_MSM=m` (the modules are in the package). Its DTB has board-id `0 0`; `mk-bootimg-v2.sh` patches in
@@ -275,4 +336,4 @@ phone (display, touch, Wi-Fi, modem, audio out work; GPU renders but hangs under
 | `mainline/build-dtb.sh` | compiles the DTS to a DTB without rebuilding the kernel package (fast loop) |
 | `mainline/dummy-overlay.dts` | the dtbo experiment (ABL rejected it) |
 | `mainline/NOTES.md` | facts pulled from the stock device tree |
-| `tools/` | lpunpack.py (super.img), hwprobe.sh, evrec.py, vtype.py |
+| `tools/` | lpunpack.py (super.img), hwprobe.sh, evrec.py, vtype.py, gltest.py (off-screen OpenGL ES test on the render node), run-phosh.sh (start Phosh for 45 s), i2cprobe.py (probe the touch I2C bus) |
