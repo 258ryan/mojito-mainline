@@ -3,7 +3,7 @@ maintainer=""
 _flavor="postmarketos-qcom-sm6150"
 pkgname=linux-$_flavor
 pkgver=7.4_rc4
-pkgrel=1
+pkgrel=4
 pkgdesc="Mainline kernel for SM6150 devices"
 arch="aarch64"
 _carch="arm64"
@@ -73,7 +73,7 @@ package() {
 sha512sums="
 df2d9560c6da42cf3620d7abb6b4070c86165b46c6e686f94c4585fc3b887d30cc38550390b1be2dccdafe226ad60f1e5604c080853c25da618a74d38bb75c28  linux-postmarketos-qcom-sm6150-v7.4-rc4.tar.gz
 0741746ecf69af3c6a03634a348e30608f777e0024ebbe343b13a8ecbd91744bbe037c180c87723e630ee89568a766f8a215a4b4065ecac0d16a74cf47867521  config-postmarketos-qcom-sm6150.aarch64
-bb837800d7cf3727743c7fc06799f18e221b67a062101d9bf79e0af73e79ea9f61f9eb2308a802f1fb13c9224772ece81c8e07bb90689539d409b9a616f8a932  0001-arm64-dts-qcom-add-xiaomi-mojito.patch
+72029553a1a400b28836fea56ca666573efaeb2d939e72960c6dbcbc27288b26abc76b1b7a2232b51561d6c197940a3070fde9c0be4788a6e4e91b0c68ed64ed  0001-arm64-dts-qcom-add-xiaomi-mojito.patch
 61202bda639a577e543975b72e66be7d0b49b0d2349b100fadfc9500e1c8059ef48b5156fa7b83a7eca41d9b87752d210ae1e0a400a68374b32a4f9446ce5a3e  0002-firmware-qcom-tzmem-do-not-use-the-SHM-bridge-on-sm6150.patch
 278eecc64de52cf3fb75be386f8a6f947e9cf2e6a63a311647d63aa7ae5b4578446630ea381bbd74d52184db2f40342cfaa152d1fbb1dfbf4f30d12e0b5bdd97  0003-interconnect-qcom-qcs615-add-the-ACV-enable-mask.patch
 "

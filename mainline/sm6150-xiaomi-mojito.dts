@@ -43,6 +43,23 @@
 			compatible = "simple-framebuffer";
 			reg = <0x0 0x9c000000 0x0 (1080 * 2400 * 4)>;
 			memory-region = <&cont_splash_mem>;
+			/*
+			 * Without a consumer, genpd sync_state powers mdss_core_gdsc off about 6 s after boot
+			 * (pd_ignore_unused does not stop that path) and the panel shows noisy green.
+			 */
+			power-domains = <&dispcc MDSS_CORE_GDSC>;
+			/*
+			 * Hold the display clocks the bootloader left running. Without a reference the display
+			 * clock controller's sync_state/cleanup lets the pipeline die (panel black). byte0 and
+			 * pclk0 report 0 Hz (their DSI PLL parent is registered by msm.ko) and are only gated on,
+			 * which is already their hardware state, so the bootloader's pixel timing is untouched.
+			 */
+			clocks = <&dispcc DISP_CC_MDSS_AHB_CLK>,
+				 <&dispcc DISP_CC_MDSS_MDP_CLK>,
+				 <&dispcc DISP_CC_MDSS_VSYNC_CLK>,
+				 <&dispcc DISP_CC_MDSS_ESC0_CLK>,
+				 <&dispcc DISP_CC_MDSS_BYTE0_CLK>,
+				 <&dispcc DISP_CC_MDSS_PCLK0_CLK>;
 			width = <1080>;
 			height = <2400>;
 			stride = <(1080 * 4)>;
@@ -410,4 +427,33 @@
 
 &pil_gpu_mem {
 	reg = <0x0 0x97b15000 0x0 0x2000>;
+};
+
+/*
+ * Hardware hazards found on this SoC family. Both were also hit by the Redmi Note 7 Pro port
+ * (github.com/VipinVIP/violet-sm6150-mainline); the TLMM one needs more reservations on this phone.
+ */
+
+/*
+ * TLMM: eight GPIOs are owned by the secure world and must not be read: gpio0-3 (WEST tile) and gpio6-9
+ * (EAST tile), probably the first two QUP serial engines kept for something like a fingerprint sensor or a
+ * secure element. A read of gpio0 or gpio1 hangs the CPU; a read of gpio2, 3 or 6-9 raises a synchronous
+ * external abort. The pin controller reads the control register of every valid line when it registers the
+ * gpio chip, so a single one of these being valid kills the probe (the oops is in msm_gpio_get_direction).
+ *
+ * Found by reading every pin through /dev/mem from userspace, one child process per pin, and recording the
+ * child's exit status (a child killed by SIGBUS is an abort, a child that never returns is a wedge); the
+ * other 115 pins read back plausible register values, and the kernel then registered the chip and dumped all
+ * of them. The Redmi Note 7 Pro port reserves only <0 4>, which is not enough here (gpio6 aborts).
+ *
+ * gpio123 is UFS_RESET (its register is at west tile + 0x9f000, outside the 0x1000 * id pattern); it was
+ * not scanned and nothing here uses it, so it stays reserved as a precaution.
+ */
+&tlmm {
+	gpio-reserved-ranges = <0 4>, <6 4>, <123 1>;
+};
+
+/* aggre1_noc QoS writes hang the CPU: leave it unclocked so they are skipped. */
+&aggre1_noc {
+	/delete-property/ clocks;
 };
