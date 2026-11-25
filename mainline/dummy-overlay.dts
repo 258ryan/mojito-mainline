@@ -1,0 +1,21 @@
+/dts-v1/;
+/plugin/;
+
+/*
+ * Xiaomi's ABL insists on applying an overlay that matches the board
+ * (stock overlay #16: IDP, msm-id 355, board-id 34) and rejects one with no
+ * fragments. This one only adds an unused property to the root node.
+ */
+/ {
+	model = "IDP";
+	compatible = "qcom,sm6150-idp", "qcom,sm6150", "qcom,idp";
+	qcom,msm-id = <355 0x0>;
+	qcom,board-id = <34 0>;
+
+	fragment@0 {
+		target-path = "/";
+		__overlay__ {
+			postmarketos,dummy-overlay;
+		};
+	};
+};

@@ -1,0 +1,87 @@
+# Reference: <https://postmarketos.org/vendorkernel>
+# Kernel config based on: arch/arm64/configs/mojito_defconfig
+#   (taken from https://github.com/AbdulkareemQasem/Redmi-Note-10)
+maintainer=""
+pkgname=linux-xiaomi-mojito
+pkgver=4.14.253
+pkgrel=3
+pkgdesc="Xiaomi Redmi Note 10 kernel fork"
+arch="aarch64"
+_carch="arm64"
+_flavor="xiaomi-mojito"
+url="https://kernel.org"
+license="GPL-2.0-only"
+options="!strip !check !tracedeps pmb:cross-native"
+makedepends="
+	bash
+	bc
+	gcc6
+	bison
+	clang
+	devicepkg-dev
+	findutils
+	flex
+	linux-headers
+	android-tools
+	llvm
+	openssl-dev
+	perl
+	python3
+	xz
+"
+
+# Compiler: clang. gcc6 is listed only so pmbootstrap installs the
+# aarch64 cross binutils (as/ld/objcopy) that this 4.14 kernel needs.
+export CC="clang"
+export HOSTCC="clang"
+
+# Source (branch "11" of xiaomi-sdm678/android_kernel_xiaomi_mojito)
+_repository="android_kernel_xiaomi_mojito"
+_commit="4f60b376454f6d914cb5177da2981353c07efc28"
+_config="config-$_flavor.$arch"
+source="
+	$pkgname-$_commit.tar.gz::https://github.com/xiaomi-sdm678/$_repository/archive/$_commit.tar.gz
+	$_config
+"
+builddir="$srcdir/$_repository-$_commit"
+_outdir="out"
+
+prepare() {
+	default_prepare
+	REPLACE_GCCH=0
+	. downstreamkernel_prepare
+}
+
+build() {
+	unset LDFLAGS
+	make O="$_outdir" ARCH="$_carch" CC="clang" HOSTCC="clang" \
+		KBUILD_BUILD_VERSION="$((pkgrel + 1 ))-postmarketOS"
+	make O="$_outdir" ARCH="$_carch" CC="clang" HOSTCC="clang" dtbs
+}
+
+package() {
+	downstreamkernel_package "$builddir" "$pkgdir" "$_carch" \
+		"$_flavor" "$_outdir"
+
+	make O="$_outdir" modules_install \
+		ARCH="$_carch" \
+		INSTALL_MOD_PATH="$pkgdir" \
+		INSTALL_MOD_STRIP=1
+	rm -f "$pkgdir"/lib/modules/*/build "$pkgdir"/lib/modules/*/source
+
+	# Qualcomm-style dtb.img: all base SoC DTBs concatenated. The bootloader
+	# picks the matching one by msm-id and applies the stock dtbo on top.
+	mkdir -p "$pkgdir"/boot/dtbs/qcom
+	cat "$_outdir"/arch/arm64/boot/dts/qcom/*.dtb \
+		> "$pkgdir"/boot/dtbs/qcom/xiaomi-mojito.dtb
+
+	# Matching dtbo.img from the kernel's overlays (Xiaomi's board changes
+	# live in sm6150-idp*.dts). Flash it to the dtbo partition.
+	mkdtboimg create "$pkgdir"/boot/dtbo.img --page_size=4096 \
+		"$_outdir"/arch/arm64/boot/dts/qcom/*.dtbo
+}
+
+sha512sums="
+bb4f2bd59cc5fd788fea431b84221001b70dcf272c6555b196ec33471b6f4f89df4dc77100df1506427ed73c7e237daaa4efc12afe7f8542a745ae072ca36c2e  linux-xiaomi-mojito-4f60b376454f6d914cb5177da2981353c07efc28.tar.gz
+e394ac5c6b0c1baa6347c367153dbb6b4b5cc498c68fefff744b42e1dbe602cf0d786e2d8d1ef88350328c06ff38209934180058ae498947a86b01203962a398  config-xiaomi-mojito.aarch64
+"

@@ -1,0 +1,24 @@
+# Firmware blobs from https://github.com/AbdulkareemQasem/Redmi-Note-10 (firmware-mojito/files)
+maintainer=""
+pkgname=firmware-xiaomi-mojito
+pkgver=1
+pkgrel=0
+pkgdesc="Firmware for Xiaomi Redmi Note 10"
+url="https://github.com/AbdulkareemQasem/Redmi-Note-10"
+arch="aarch64"
+license="proprietary"
+options="!check !strip !archcheck !tracedeps pmb:cross-native"
+
+_commit="cc98f05627d90ad0cada38a7381cbe095f3e4783"
+source="$pkgname-$_commit.tar.gz::https://github.com/AbdulkareemQasem/Redmi-Note-10/archive/$_commit.tar.gz"
+
+package() {
+	cd "$srcdir/Redmi-Note-10-$_commit/firmware-mojito/files"
+	for _i in *; do
+		install -Dm644 "$_i" "$pkgdir/lib/firmware/postmarketos/$_i"
+	done
+}
+
+sha512sums="
+337821e76685d2bc30fbb011510765931a55fb2772a29ff077e2b01a089a4ef31f7debcfb9b0b2489f4564c8aee50ce313e5fa15540d85b4d2856dad102a52f6  firmware-xiaomi-mojito-cc98f05627d90ad0cada38a7381cbe095f3e4783.tar.gz
+"

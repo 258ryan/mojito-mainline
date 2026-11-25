@@ -1,0 +1,17 @@
+# never commit: vendor blobs, images, device dumps, kernel trees
+*.img
+*.bin
+*.mbn
+*.mdt
+*.b[0-9][0-9]
+*.dtb
+*.dtbo
+*.so
+*.tar.gz
+*.tgz
+firmware/
+stock/
+downstream-dt/
+linux-*/
+!mainline/linux-postmarketos-qcom-sm6150/
+!downstream/linux-xiaomi-mojito/
