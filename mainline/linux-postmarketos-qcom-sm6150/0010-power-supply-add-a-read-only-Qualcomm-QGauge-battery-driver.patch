@@ -1,0 +1,581 @@
+From: postmarketOS mojito port
+Subject: [PATCH] power: supply: add a read-only Qualcomm QGauge battery driver
+
+Voltage, current, temperature and a coulomb-counted, OCV-corrected state of charge from the PM6150 QG
+block the bootloader leaves running. Learned capacity and the saved SOC come from the QG SDAM.
+While a "power-supplies" charger is online its status is reported (no flapping on weak inputs).
+The reported SOC is written back to the SDAM SOC byte, as the vendor driver does.
+---
+diff --git a/drivers/power/supply/Kconfig b/drivers/power/supply/Kconfig
+index e614a5137..ef500ea05 100644
+--- a/drivers/power/supply/Kconfig
++++ b/drivers/power/supply/Kconfig
+@@ -1182,6 +1182,16 @@ config CHARGER_QCOM_SMB2
+ 	  adds support for the SMB2 switch mode battery charger found
+ 	  in PMI8998 and related PMICs.
+ 
++config BATTERY_QCOM_QG_LITE
++	tristate "Qualcomm QGauge battery monitor (read-only)"
++	depends on MFD_SPMI_PMIC
++	depends on IIO
++	help
++	  Battery voltage, current and an estimated state of charge from the
++	  QGauge (QG) block in PM6150-class PMICs, which the bootloader leaves
++	  running. The driver only reads the hardware. The state of charge is
++	  coulomb counted and corrected toward the battery's OCV table.
++
+ config CHARGER_QCOM_SMB5
+ 	tristate "Qualcomm SMB5 PMIC charger driver (PM8150B, PM6150)"
+ 	depends on MFD_SPMI_PMIC
+diff --git a/drivers/power/supply/Makefile b/drivers/power/supply/Makefile
+index d3ffa0518..737426b42 100644
+--- a/drivers/power/supply/Makefile
++++ b/drivers/power/supply/Makefile
+@@ -136,3 +136,4 @@ obj-$(CONFIG_FUEL_GAUGE_MM8013)	+= mm8013.o
+ obj-$(CONFIG_MACSMC_POWER)	+= macsmc-power.o
+ obj-$(CONFIG_CHARGER_MAX77759)	+= max77759_charger.o
+ obj-$(CONFIG_CHARGER_QCOM_SMB5)	+= qcom_pm8150b_charger.o
++obj-$(CONFIG_BATTERY_QCOM_QG_LITE)	+= qcom_qg_lite.o
+diff --git a/drivers/power/supply/qcom_qg_lite.c b/drivers/power/supply/qcom_qg_lite.c
+new file mode 100644
+index 000000000..796bda1ad
+--- /dev/null
++++ b/drivers/power/supply/qcom_qg_lite.c
+@@ -0,0 +1,537 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Minimal, read-only battery driver for the Qualcomm QGauge (QG) block found in
++ * PM6150/PM7150B/PMI632-class PMICs.
++ *
++ * It does not program the QG: the bootloader (XBL) leaves it running and
++ * measuring, and this driver only reads the battery voltage and current it
++ * reports. The only write is the reported SOC into the QG SDAM byte the
++ * vendor driver also keeps it in, so the next boot starts from it. The state of charge is started from the value the previous OS left
++ * in the QG SDAM (or from the OCV table if that is missing), followed by
++ * coulomb counting, and slowly pulled toward the OCV-table estimate
++ * (voltage + I x R) whenever the current is low. Battery data (OCV tables,
++ * design capacity, internal resistance) comes from a "simple-battery" node.
++ *
++ * Register layout and scaling follow the vendor driver (qg-reg.h, qg-util.c).
++ */
++
++#include <linux/bitfield.h>
++#include <linux/devm-helpers.h>
++#include <linux/iio/consumer.h>
++#include <linux/math64.h>
++#include <linux/minmax.h>
++#include <linux/module.h>
++#include <linux/mutex.h>
++#include <linux/of.h>
++#include <linux/platform_device.h>
++#include <linux/power_supply.h>
++#include <linux/regmap.h>
++#include <linux/workqueue.h>
++
++#define QG_PERPH_SUBTYPE		0x05
++#define QG_SUBTYPE_IBAT_5A		0x03
++#define QG_STATUS1			0x08
++#define  QG_STATUS1_OK			BIT(7)
++#define  QG_STATUS1_BATT_PRESENT	BIT(0)
++#define QG_LAST_ADC_V			0xc0
++#define QG_LAST_BURST_AVG_I		0xc6
++
++#define SDAM_VALID			0x46
++#define SDAM_SOC			0x47
++#define SDAM_LEARNED_CAP		0x68	/* 2 bytes, mAh */
++
++#define QG_POLL_MS			5000
++#define QG_V_UV_PER_LSB_X1000		194637ULL
++#define QG_I_UA_PER_LSB_X1000_5A	152588LL
++#define QG_I_UA_PER_LSB_X1000_10A	305176LL
++#define QG_DEFAULT_RBAT_UOHM		150000
++#define QG_REST_CURRENT_UA		100000
++#define QG_DIR_CURRENT_UA		20000
++#define QG_STATUS_CURRENT_UA		50000
++#define QG_USBIN_ONLINE_UV		4000000
++
++struct qg_lite {
++	struct device *dev;
++	struct regmap *regmap;
++	u32 base;
++	u32 sdam_base;
++	bool has_sdam;
++	s64 i_scale;
++
++	struct power_supply *psy;
++	struct power_supply_battery_info *info;
++	struct iio_channel *temp_chan;
++	struct iio_channel *usbin_chan;
++	struct power_supply *chg_psy;	/* "power-supplies" charger, looked up lazily */
++	bool no_chg_psy;
++	struct delayed_work work;
++	struct mutex lock;
++	int learned_uah;	/* from SDAM, 0 if unusable */
++
++	/* state, protected by lock */
++	bool ready;
++	int vbat_uv;
++	int ibat_ua;		/* QG convention: positive = discharging */
++	int temp_dc;		/* tenths of a degree C */
++	int ocv_uv;
++	s64 charge_nah;		/* coulomb counter */
++	int soc_x100;		/* internal SOC, 0..10000 */
++	int soc_reported;	/* 0..100, the value userspace sees */
++	int status;
++	int status_cand;
++	ktime_t last;
++};
++
++static int qg_read_u16(struct qg_lite *qg, u32 reg, u16 *val)
++{
++	u8 buf[2];
++	int ret;
++
++	ret = regmap_bulk_read(qg->regmap, qg->base + reg, buf, 2);
++	if (ret)
++		return ret;
++	*val = buf[0] | (buf[1] << 8);
++	return 0;
++}
++
++static int qg_read_vi(struct qg_lite *qg, int *v_uv, int *i_ua)
++{
++	u16 raw;
++	int ret;
++
++	ret = qg_read_u16(qg, QG_LAST_ADC_V, &raw);
++	if (ret)
++		return ret;
++	*v_uv = div_u64(QG_V_UV_PER_LSB_X1000 * raw, 1000);
++
++	ret = qg_read_u16(qg, QG_LAST_BURST_AVG_I, &raw);
++	if (ret)
++		return ret;
++	*i_ua = div_s64(qg->i_scale * sign_extend32(raw, 15), 1000);
++	return 0;
++}
++
++static int qg_temp_dc(struct qg_lite *qg)
++{
++	int mdeg;
++
++	if (qg->temp_chan && !iio_read_channel_processed(qg->temp_chan, &mdeg))
++		return mdeg / 100;
++	return 250;
++}
++
++static int qg_usbin_online(struct qg_lite *qg)
++{
++	int uv;
++
++	if (!qg->usbin_chan || iio_read_channel_processed(qg->usbin_chan, &uv))
++		return -ENODATA;
++	return uv > QG_USBIN_ONLINE_UV;
++}
++
++static int qg_design_uah(struct qg_lite *qg)
++{
++	return qg->info->charge_full_design_uah > 0 ?
++	       qg->info->charge_full_design_uah : 5000000;
++}
++
++static int qg_full_uah(struct qg_lite *qg)
++{
++	return qg->learned_uah ? qg->learned_uah : qg_design_uah(qg);
++}
++
++/* capacity the previous OS learned; trusted only between 50 % and 110 % of design */
++static void qg_read_learned(struct qg_lite *qg)
++{
++	u8 buf[2];
++	int uah;
++
++	if (!qg->has_sdam ||
++	    regmap_bulk_read(qg->regmap, qg->sdam_base + SDAM_LEARNED_CAP, buf, 2))
++		return;
++	uah = (buf[0] | (buf[1] << 8)) * 1000;
++	if (uah >= qg_design_uah(qg) / 2 && uah <= qg_design_uah(qg) * 11 / 10)
++		qg->learned_uah = uah;
++}
++
++static int qg_ocv_soc_x100(struct qg_lite *qg, int v_uv, int i_ua, int temp_dc)
++{
++	int rbat = qg->info->factory_internal_resistance_uohm > 0 ?
++		   qg->info->factory_internal_resistance_uohm : QG_DEFAULT_RBAT_UOHM;
++	int cap;
++
++	qg->ocv_uv = v_uv + (int)div_s64((s64)i_ua * rbat, 1000000);
++	cap = power_supply_batinfo_ocv2cap(qg->info, qg->ocv_uv, temp_dc / 10);
++	if (cap < 0)
++		return -EINVAL;
++	return clamp(cap, 0, 100) * 100;
++}
++
++/*
++ * With a charger described by "power-supplies", its status is used while it is
++ * online: it comes from the charger's state machine (pre/fast/taper charge,
++ * terminated, inhibited), which does not flip when the phone's load briefly
++ * exceeds a weak input limit and the battery current changes sign.
++ */
++static int qg_charger_status(struct qg_lite *qg)
++{
++	union power_supply_propval val;
++
++	if (!qg->chg_psy && !qg->no_chg_psy) {
++		struct power_supply *psy =
++			devm_power_supply_get_by_reference(qg->dev, "power-supplies");
++
++		if (IS_ERR(psy))
++			qg->no_chg_psy = true;	/* not described: no charger lookup */
++		else
++			qg->chg_psy = psy;	/* NULL: not registered yet, retry */
++	}
++	if (!qg->chg_psy)
++		return -ENODEV;
++
++	if (power_supply_get_property(qg->chg_psy, POWER_SUPPLY_PROP_ONLINE, &val))
++		return -EIO;
++	if (!val.intval)
++		return POWER_SUPPLY_STATUS_DISCHARGING;
++	if (power_supply_get_property(qg->chg_psy, POWER_SUPPLY_PROP_STATUS, &val))
++		return -EIO;
++	if (val.intval == POWER_SUPPLY_STATUS_NOT_CHARGING && qg->soc_reported >= 99)
++		return POWER_SUPPLY_STATUS_FULL;
++	if (val.intval == POWER_SUPPLY_STATUS_UNKNOWN ||
++	    val.intval == POWER_SUPPLY_STATUS_DISCHARGING)
++		return -EIO;
++	return val.intval;
++}
++
++/*
++ * Without a charger driver: guess from the current. Near full on USB the
++ * charger tapers or inhibits and the battery current wanders around zero in
++ * both directions, so "full" tolerates +-200 mA.
++ */
++static int qg_status_now(struct qg_lite *qg)
++{
++	int online, i = qg->ibat_ua;
++	int chg = qg_charger_status(qg);
++
++	if (chg >= 0)
++		return chg;
++
++	online = qg_usbin_online(qg);
++
++	if (online > 0 && qg->soc_reported >= 99 && abs(i) <= 200000)
++		return POWER_SUPPLY_STATUS_FULL;
++	if (i < -QG_STATUS_CURRENT_UA)
++		return POWER_SUPPLY_STATUS_CHARGING;
++	if (i > QG_STATUS_CURRENT_UA || online <= 0)
++		return POWER_SUPPLY_STATUS_DISCHARGING;
++	return POWER_SUPPLY_STATUS_NOT_CHARGING;
++}
++
++/* a new status must be seen on two polls in a row before it is reported */
++static int qg_status(struct qg_lite *qg)
++{
++	int now = qg_status_now(qg);
++
++	if (now == qg->status || now == qg->status_cand) {
++		qg->status_cand = now;
++		return now;
++	}
++	qg->status_cand = now;
++	return qg->status;
++}
++
++static void qg_update(struct qg_lite *qg)
++{
++	int v, i, ocv_soc, target, old_soc, old_status, full = qg_full_uah(qg);
++	ktime_t now = ktime_get_boottime();
++	s64 dt_ms;
++
++	if (qg_read_vi(qg, &v, &i))
++		return;
++
++	mutex_lock(&qg->lock);
++	old_soc = qg->soc_reported;
++	old_status = qg->status;
++
++	dt_ms = ktime_ms_delta(now, qg->last);
++	qg->last = now;
++	qg->vbat_uv = v;
++	qg->ibat_ua = i;
++	qg->temp_dc = qg_temp_dc(qg);
++
++	/* coulomb counting: nAh = uA * ms / 3600 */
++	qg->charge_nah -= div_s64((s64)i * dt_ms, 3600);
++	qg->charge_nah = clamp_t(s64, qg->charge_nah, 0, (s64)full * 1000);
++	qg->soc_x100 = div_s64(qg->charge_nah * 10, full);
++
++	/* pull toward the OCV estimate, strongly only when it is trustworthy */
++	ocv_soc = qg_ocv_soc_x100(qg, v, i, qg->temp_dc);
++	if (ocv_soc >= 0) {
++		int div = abs(i) < QG_REST_CURRENT_UA ? 20 : 200;
++
++		qg->soc_x100 += (ocv_soc - qg->soc_x100) / div;
++	}
++
++	/* end points */
++	if (i < 0 && abs(i) < 150000 && qg_usbin_online(qg) > 0 &&
++	    v >= qg->info->voltage_max_design_uv - 30000 &&
++	    qg->info->voltage_max_design_uv > 0)
++		qg->soc_x100 = 10000;
++	if (qg->info->voltage_min_design_uv > 0 &&
++	    v < qg->info->voltage_min_design_uv)
++		qg->soc_x100 = 0;
++
++	qg->soc_x100 = clamp(qg->soc_x100, 0, 10000);
++	qg->charge_nah = div_s64((s64)qg->soc_x100 * full, 10);
++
++	/* reported value only moves in the direction the current flows */
++	target = DIV_ROUND_CLOSEST(qg->soc_x100, 100);
++	if (i > QG_DIR_CURRENT_UA)
++		target = min(target, qg->soc_reported);
++	else if (i < -QG_DIR_CURRENT_UA)
++		target = max(target, qg->soc_reported);
++	qg->soc_reported = target;
++	qg->status = qg_status(qg);
++	if (target != old_soc && qg->has_sdam)
++		regmap_write(qg->regmap, qg->sdam_base + SDAM_SOC, target);
++	mutex_unlock(&qg->lock);
++
++	if (target != old_soc || qg->status != old_status)
++		power_supply_changed(qg->psy);
++}
++
++static void qg_work(struct work_struct *work)
++{
++	struct qg_lite *qg = container_of(work, struct qg_lite, work.work);
++
++	qg_update(qg);
++	schedule_delayed_work(&qg->work, msecs_to_jiffies(QG_POLL_MS));
++}
++
++static void qg_init_soc(struct qg_lite *qg)
++{
++	int v, i, ocv_soc, soc = -1;
++	unsigned int valid = 0, sdam_soc = 0;
++
++	if (qg_read_vi(qg, &v, &i)) {
++		v = qg->info->voltage_max_design_uv;
++		i = 0;
++	}
++	qg->temp_dc = qg_temp_dc(qg);
++	ocv_soc = qg_ocv_soc_x100(qg, v, i, qg->temp_dc);
++
++	if (qg->has_sdam &&
++	    !regmap_read(qg->regmap, qg->sdam_base + SDAM_VALID, &valid) &&
++	    !regmap_read(qg->regmap, qg->sdam_base + SDAM_SOC, &sdam_soc) &&
++	    (valid & BIT(0)) && sdam_soc <= 100)
++		soc = sdam_soc * 100;
++
++	/* a stale saved value (the battery changed while off) loses to the OCV */
++	if (soc < 0 || (ocv_soc >= 0 && abs(soc - ocv_soc) > 1000))
++		soc = ocv_soc >= 0 ? ocv_soc : 5000;
++
++	dev_info(qg->dev, "vbat %d uV ibat %d uA, start SOC %d%% (sdam %s, ocv %d%%)\n",
++		 v, -i, soc / 100, soc == (int)sdam_soc * 100 ? "used" : "ignored",
++		 ocv_soc / 100);
++
++	qg->vbat_uv = v;
++	qg->ibat_ua = i;
++	qg->soc_x100 = soc;
++	qg->soc_reported = DIV_ROUND_CLOSEST(soc, 100);
++	qg->charge_nah = div_s64((s64)soc * qg_full_uah(qg), 10);
++	qg->last = ktime_get_boottime();
++	qg->status = qg_status_now(qg);
++	qg->status_cand = qg->status;
++	qg->ready = true;
++}
++
++static const enum power_supply_property qg_props[] = {
++	POWER_SUPPLY_PROP_STATUS,
++	POWER_SUPPLY_PROP_PRESENT,
++	POWER_SUPPLY_PROP_TECHNOLOGY,
++	POWER_SUPPLY_PROP_CAPACITY,
++	POWER_SUPPLY_PROP_VOLTAGE_NOW,
++	POWER_SUPPLY_PROP_VOLTAGE_OCV,
++	POWER_SUPPLY_PROP_CURRENT_NOW,
++	POWER_SUPPLY_PROP_TEMP,
++	POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN,
++	POWER_SUPPLY_PROP_CHARGE_FULL,
++	POWER_SUPPLY_PROP_CHARGE_NOW,
++	POWER_SUPPLY_PROP_VOLTAGE_MAX_DESIGN,
++	POWER_SUPPLY_PROP_VOLTAGE_MIN_DESIGN,
++};
++
++static int qg_get_property(struct power_supply *psy,
++			   enum power_supply_property psp,
++			   union power_supply_propval *val)
++{
++	struct qg_lite *qg = power_supply_get_drvdata(psy);
++	unsigned int sts;
++	int ret = 0;
++
++	if (psp == POWER_SUPPLY_PROP_PRESENT) {
++		ret = regmap_read(qg->regmap, qg->base + QG_STATUS1, &sts);
++		if (!ret)
++			val->intval = !!(sts & QG_STATUS1_BATT_PRESENT);
++		return ret;
++	}
++	if (psp == POWER_SUPPLY_PROP_TECHNOLOGY) {
++		val->intval = POWER_SUPPLY_TECHNOLOGY_LION;
++		return 0;
++	}
++
++	mutex_lock(&qg->lock);
++	if (!qg->ready) {
++		mutex_unlock(&qg->lock);
++		return -EAGAIN;
++	}
++
++	switch (psp) {
++	case POWER_SUPPLY_PROP_STATUS:
++		val->intval = qg->status;
++		break;
++	case POWER_SUPPLY_PROP_CAPACITY:
++		val->intval = qg->soc_reported;
++		break;
++	case POWER_SUPPLY_PROP_VOLTAGE_NOW:
++		val->intval = qg->vbat_uv;
++		break;
++	case POWER_SUPPLY_PROP_VOLTAGE_OCV:
++		val->intval = qg->ocv_uv;
++		break;
++	case POWER_SUPPLY_PROP_CURRENT_NOW:
++		/* power_supply ABI: negative while discharging */
++		val->intval = -qg->ibat_ua;
++		break;
++	case POWER_SUPPLY_PROP_TEMP:
++		val->intval = qg->temp_dc;
++		break;
++	case POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN:
++		val->intval = qg_design_uah(qg);
++		break;
++	case POWER_SUPPLY_PROP_CHARGE_FULL:
++		val->intval = qg_full_uah(qg);
++		break;
++	case POWER_SUPPLY_PROP_CHARGE_NOW:
++		val->intval = div_s64(qg->charge_nah, 1000);
++		break;
++	case POWER_SUPPLY_PROP_VOLTAGE_MAX_DESIGN:
++		val->intval = qg->info->voltage_max_design_uv;
++		break;
++	case POWER_SUPPLY_PROP_VOLTAGE_MIN_DESIGN:
++		val->intval = qg->info->voltage_min_design_uv;
++		break;
++	default:
++		ret = -EINVAL;
++	}
++	mutex_unlock(&qg->lock);
++	return ret;
++}
++
++static const struct power_supply_desc qg_desc = {
++	.name = "qcom-battery",
++	.type = POWER_SUPPLY_TYPE_BATTERY,
++	.properties = qg_props,
++	.num_properties = ARRAY_SIZE(qg_props),
++	.get_property = qg_get_property,
++};
++
++static struct iio_channel *qg_get_iio(struct device *dev, const char *name)
++{
++	struct iio_channel *chan = devm_iio_channel_get(dev, name);
++
++	if (IS_ERR(chan) && PTR_ERR(chan) != -EPROBE_DEFER)
++		return NULL;	/* optional */
++	return chan;
++}
++
++static int qg_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct power_supply_config cfg = {};
++	struct qg_lite *qg;
++	unsigned int subtype, sts;
++	u32 regs[2];
++	int ret, n;
++
++	qg = devm_kzalloc(dev, sizeof(*qg), GFP_KERNEL);
++	if (!qg)
++		return -ENOMEM;
++	qg->dev = dev;
++	mutex_init(&qg->lock);
++
++	qg->regmap = dev_get_regmap(dev->parent, NULL);
++	if (!qg->regmap)
++		return dev_err_probe(dev, -ENODEV, "no parent regmap\n");
++
++	n = of_property_count_u32_elems(dev->of_node, "reg");
++	if (n < 1 || of_property_read_u32_array(dev->of_node, "reg", regs, min(n, 2)))
++		return dev_err_probe(dev, -EINVAL, "bad reg property\n");
++	qg->base = regs[0];
++	if (n >= 2) {
++		qg->sdam_base = regs[1];
++		qg->has_sdam = true;
++	}
++
++	ret = regmap_read(qg->regmap, qg->base + QG_PERPH_SUBTYPE, &subtype);
++	if (ret)
++		return dev_err_probe(dev, ret, "cannot read subtype\n");
++	qg->i_scale = subtype == QG_SUBTYPE_IBAT_5A ? QG_I_UA_PER_LSB_X1000_5A :
++						      QG_I_UA_PER_LSB_X1000_10A;
++
++	ret = regmap_read(qg->regmap, qg->base + QG_STATUS1, &sts);
++	if (ret)
++		return ret;
++	if (!(sts & QG_STATUS1_OK))
++		dev_warn(dev, "QG not marked OK by the bootloader (status1 %#x)\n", sts);
++
++	qg->temp_chan = qg_get_iio(dev, "batt_therm");
++	if (IS_ERR(qg->temp_chan))
++		return PTR_ERR(qg->temp_chan);
++	qg->usbin_chan = qg_get_iio(dev, "usb_in_v");
++	if (IS_ERR(qg->usbin_chan))
++		return PTR_ERR(qg->usbin_chan);
++
++	cfg.drv_data = qg;
++	cfg.fwnode = dev_fwnode(dev);
++	qg->psy = devm_power_supply_register(dev, &qg_desc, &cfg);
++	if (IS_ERR(qg->psy))
++		return dev_err_probe(dev, PTR_ERR(qg->psy), "cannot register\n");
++
++	ret = power_supply_get_battery_info(qg->psy, &qg->info);
++	if (ret)
++		return dev_err_probe(dev, ret, "no monitored-battery info\n");
++	if (!qg->info->ocv_table[0])
++		return dev_err_probe(dev, -EINVAL, "monitored-battery has no OCV table\n");
++
++	mutex_lock(&qg->lock);
++	qg_read_learned(qg);
++	qg_init_soc(qg);
++	mutex_unlock(&qg->lock);
++	power_supply_changed(qg->psy);
++
++	ret = devm_delayed_work_autocancel(dev, &qg->work, qg_work);
++	if (ret)
++		return ret;
++	schedule_delayed_work(&qg->work, msecs_to_jiffies(QG_POLL_MS));
++	return 0;
++}
++
++static const struct of_device_id qg_of_match[] = {
++	{ .compatible = "qcom,pm6150-qg" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, qg_of_match);
++
++static struct platform_driver qg_driver = {
++	.probe = qg_probe,
++	.driver = {
++		.name = "qcom-qg-lite",
++		.of_match_table = qg_of_match,
++	},
++};
++module_platform_driver(qg_driver);
++
++MODULE_DESCRIPTION("Read-only Qualcomm QGauge battery driver");
++MODULE_IMPORT_NS("IIO_CONSUMER");
++MODULE_LICENSE("GPL");

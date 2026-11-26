@@ -3,53 +3,43 @@
 For the next agent picking this up. Read the START HERE section, then the rest as needed, before touching the phone.
 State as of 2026-11-27.
 
-## START HERE (2026-11-27): where things stand
+## START HERE (2026-11-26, evening): where things stand
 
-**Working on slot B (mainline 7.4-rc4):** boot to SSH over USB, UFS, USB gadget, watchdog, the TLMM pin controller (115 GPIOs,
-8 secure-world pins reserved), the **real display stack with DCS brightness**, **touch** (FT5452), the **Adreno 612** (freedreno, GLES 3.2),
-**Phosh starting on boot** through an OpenRC service with a seat-attached elogind session (brightness slider works), flash LED and
-RTC nodes, `i2c3` enabled. **Not working / not started:** battery level and charging control, audio, Wi-Fi/Bluetooth, modem, camera,
-NFC, sleep/suspend, vibrator, Vulkan. **Slot A** (downstream 4.14) is untouched and works; keep it that way.
+**Working on slot B (mainline 7.4-rc4, package `pkgrel=21`):** boot to SSH over USB, UFS, USB gadget, watchdog, TLMM, the real display
+stack with DCS brightness, touch, the Adreno 612 (freedreno), Phosh on boot, flash LED, RTC, **battery readout (own fuel-gauge driver),
+charging (SMB5), the ADSP, and the modem: LTE registration, mobile data (IPv4 + IPv6, ~22 Mbit/s) and SMS sending verified.**
+**Not working / not started:** calls (need call audio), audio, Wi-Fi/Bluetooth, camera, sensors, suspend, vibrator, Vulkan.
+**Slot A** (downstream 4.14) is untouched and works; keep it that way.
 
-**Exactly what is on the phone right now** (so you know the baseline before changing anything):
-- Slot B `boot_b`: the **r11** kernel `Image` packed with the **final** device tree (identical to what `pkgrel=12` in the repo builds, except
-  r11 also carries a harmless unused `dispcc` reset table). `dtbo_b` is erased. Slot A's `boot_a` was restored to the original image.
-- `/etc/modprobe.d/msm.conf`: `options msm separate_gpu_kms=1` (display and GPU are two DRM devices: `card2` = msm KMS with the DSI connector,
-  `card1` = GPU, `renderD128`). Modules in `/lib/modules/7.4.0-rc4-sm6150` are r11's (the previous tree is kept as `.old`).
-- OpenRC: `elogind` and `phosh-mojito` in `default`, `kmscon-console` removed from `default`, `user` in group `seat`,
-  `/etc/pam.d/phosh` exists. The text console is gone from the screen on purpose (it would hold the display); SSH is the way in.
-- The phone's **clock is stuck in 1970** (no RTC time, no network). That already broke OpenRC once (see the Phosh autostart section).
+**Exactly what is on the phone right now:**
+- `boot_b`: package r19's kernel + the r20/r21 device tree (identical DTS); `dtbo_b` erased. r21 only adds an SMB5 status fix
+  (driver change). Modules installed with `tools/install-modules.sh` (depmod on the phone). `/etc/modprobe.d/` has no blacklists left.
+- OpenRC default runlevel adds `tqftpserv`, `rmtfs`, `modemmanager` (installed with `tools/install-modem-userspace.sh`), plus the
+  earlier `elogind`, `phosh-mojito`. A NetworkManager GSM connection `mobile` (the carrier's APN) autoconnects.
+- `rmtfs` runs in postmarketOS's default `rmtfs_avoid_writing="true"` mode: the modem's EFS writes stay in RAM. An EFS backup
+  (modemst1/2, fsg, fsc) exists on the PC, outside the repo (it carries device identifiers).
+- The clock is only right after an NTP sync over LTE (`ntpd -q -n -p pool.ntp.org`); there is no time sync at boot yet.
 
-**Housekeeping owed:** build `pkgrel=12` (`pmbootstrap build linux-postmarketos-qcom-sm6150`; the user runs builds, see rules), unpack the apk, pack the
-v2 boot image (`mainline/mk-bootimg-v2.sh`, see "Packaging the v2 boot image"; the pmos boot/root UUIDs are in the running boot image's cmdline
-or `blkid` on the phone, they are not recorded here), flash `boot_b`, erase `dtbo_b`, `set_active b`, install the modules with
-`tools/install-modules.sh` (**run `depmod` on the phone**: the package's own `depmod` cannot read `.zst` modules, so a raw copy leaves `msm` without
-dependencies), reboot. After that the repo, the package and the phone all match.
+**Suggested order from here:** (1) Wi-Fi: the modem already serves the "ATH10k WLAN firmware service" (QMI 69), so it needs the
+`wifi@18800000` node, the WCN3990 rails and the Redmi Note 7 Pro's ath10k patches 0010/0015; (2) audio: ADSP speaks **legacy APR**
+(channels `apr_audio_svc`, `apr_apps2`), not AudioReach, so it needs APR nodes + `qcom,sm8250-sndcard`, and very likely the SMMU
+patch 0017 of the violet port (hyp-owned context banks) before any stream; then call audio (`q6voiced`); (3) time sync at boot;
+(4) KWin/Finder smoke test; (5) suspend.
 
-**Suggested order from here:**
-1. **KWin/Finder smoke test.** First try dropping `separate_gpu_kms=1` (modprobe option, no build) so one DRM device both scans out and renders,
-   which is what KWin's DRM backend wants; if the unified mode misbehaves, KWin can still use `card2` + `renderD128`. Phosh already proves the stack.
-2. **Battery/charging.** Work in progress in `mainline/wip/` (see its README): a compile-tested port of the SMB5 charger driver and the device-tree
-   fragment, untested on hardware, not in the package. The charger is in **PM6150 (SID 0)**, not PM6150L. There is no driver for the QG fuel gauge,
-   so a battery percentage needs a small voltage-to-percentage `power_supply` (the downstream battery is 5000 mAh, 4.45 V max) or a QG port.
-3. **Remote processors** (the key to audio, Wi-Fi, Bluetooth, modem): ADSP first, **on its own build** (most likely to hang the boot, like the secure
-   pins did), then the modem. Firmware is already on the phone (`/lib/firmware`, see "Other hardware found").
-4. Polish: the few seconds of green/black between splash and Phosh, suspend, vibrator, flashlight, RTC time, Vulkan (turnip).
-
-**Rules and hazards learned the hard way** (the details are in the sections below):
-- The user runs the `pmbootstrap` builds and watches the panel; the agent flashes and diagnoses. Ask before using any sudo helper; never store passwords
-  in the repo; delete temporary SSH helpers. Commit/push only when asked, with the GitHub no-reply identity (see `git log`).
-- Things that **crash or hang the phone**: reading TLMM pins 0-3 and 6-9 (secure world); an `mdss` `resets` line (hangs at probe); sweeping all of
-  GCC or all PMIC regmaps on the downstream kernel; `rmmod msm` (oops). A crash gives no log: nothing survives a reset (PMIC cold-reset), so
-  prefer staged, individually safe reads.
-- After any reboot the phone's `/tmp` is empty; fastboot can list the device several seconds late (check `lsusb` and retry); an interrupted boot falls
-  back to slot A after a few tries. Reboot to the bootloader without buttons with the syscall one-liner in "Working with the phone".
-- Failure on the display always looked like "blue screen" or "black": read the kernel log (`dmesg`) before believing the picture, because when the
-  driver fails to probe the system silently falls back to `simple-framebuffer` and the screen looks healthy.
-- The investigation method that worked: compare against a known-good state (the bootloader's registers read on the r6 image; the downstream kernel
-  rebuilt with `DEVMEM`+`DEBUG_FS`), change one variable at a time, keep a deterministic repro.
-- Files outside the repo that an agent on the same machine can reuse: `~/.claude-work/pmos-mojito/` (the pmbootstrap work, `downstream-dump/` with the
-  bootloader and downstream register dumps, device tree and firmware listings). They are not in the repo because they carry device identifiers.
+**Rules and hazards learned the hard way** (details below):
+- The user runs `pmbootstrap build`; the agent flashes and diagnoses. Ask for the SSH password each session; never store passwords.
+  Commit/push only when asked, with the GitHub no-reply identity (see `git log`), and keep device identifiers, the carrier/APN and
+  phone numbers out of the repo.
+- **Stage risky drivers:** blacklist the module in `/etc/modprobe.d/` before flashing, load it by hand from SSH, un-blacklist once
+  it works. A hang then costs a manual reboot, not a broken boot. (Used for SMB5, the ADSP and IPA today.)
+- Things that crash or hang the phone: TLMM pins 0-3 and 6-9; an `mdss` `resets` line; sweeping all of GCC or all PMIC regmaps on the
+  downstream kernel; `rmmod msm`. No log survives a reset.
+- **PMIC state survives a warm reboot.** A charger misconfiguration (e.g. a latched USBIN suspend) stays until the cable is replugged.
+- Reading PMIC registers safely: `/sys/kernel/debug/regmap/0-00/registers` only reads the window asked for; each line is 9 bytes, so
+  `dd bs=9 skip=$((0xADDR)) count=N`. There is no write path (no `REGMAP_ALLOW_WRITE_DEBUGFS`).
+- Builds: ccache makes a `.c`-only change ~3 min; a config or widely included header change ~13 min. Object-only test compiles miss
+  `modpost` errors (symbol namespaces): `MODULE_IMPORT_NS("IIO_CONSUMER")` is needed for IIO consumers in 7.4.
+- After any reboot the phone's `/tmp` is empty; run `rc-update -u` after installing services (the 1970 clock confuses OpenRC's cache).
 
 ## Goal
 
@@ -459,6 +449,53 @@ phone (display, touch, Wi-Fi, modem, audio out work; GPU renders but hangs under
    `0x22` when packing. Patch 0001 is regenerated from `mainline/sm6150-xiaomi-mojito.dts`; for DTS-only
    changes use `build-dtb.sh` instead of rebuilding the package.
 
+### Battery, charging, ADSP, modem (2026-11-26, packages r13-r21)
+
+**Battery: `qcom_qg_lite` (patch 0010).** A new, small driver for the PM6150 **QGauge** block (`qgauge@4800`, SDAM `0xb600`),
+which the bootloader leaves running. It reads `LAST_ADC_V` (0xc0, 194.637 uV/LSB) and `LAST_BURST_AVG_I` (0xc6; subtype 0x04 on
+this phone = 10 A range, 305.176 uA/LSB; positive = discharging, reported negated per the power_supply ABI). SOC starts from SDAM
+`0x47` (if within 10 points of the OCV estimate), then coulomb counting, pulled toward the OCV table (voltage + I x 120 mOhm) mostly
+when |I| < 100 mA; it writes the reported SOC back to SDAM `0x47` (the only write). Learned capacity from SDAM `0x68` (4539 mAh here).
+The OCV tables are the stock profile `m305-nvt-5000mah` (`pc-temp-v1-lut`, 0/10/25/40/50 C) in the DTS `simple-battery` node.
+Battery temperature needs patch 0009 (adc5 `BAT_THERM_100K_PU`): without it an unknown channel fails the whole ADC probe. While the
+`power-supplies` charger is online its status is reported, because on a weak input the battery current changes sign every few
+seconds (the load is right around the 500 mA SDP limit) and a current-based status flaps. Another SM6150-family gauge exists in the
+sm7125 kernel (`qcom_qg.c`, same compatible): it hard-codes the 5 A scale (2x off here) and reports STATUS_UNKNOWN.
+
+**Charging: SMB5 (patch 0008).** Ported from the pipa SMB5 patches. Changes that mattered, each found on hardware:
+- No Type-C/OTG writes at probe (rewriting them could drop the USB link, the only connection).
+- Watchdog pet address is `base + 0x643`, not absolute `0x643`.
+- Input current: wall chargers (DCP 2 A) and CDP (1.5 A) use high-current mode with "ICL override after APSD" (vendor
+  `SW_OVERRIDE_HC_MODE`); in hardware-automatic mode the limit register is ignored and an SDP gets 100 mA.
+- SDP (and FLOAT, which an SDP often reads as right after a replug) use **USB51 500 mA mode without the ICL override**: with the
+  override set (what the vendor code does) this PMIC **suspends USBIN** (POWER_PATH_STATUS 0x110b bit 6) and the phone runs on battery;
+  the suspend latches until a replug. Afterwards: clear USBIN suspend, re-run AICL (0x1644).
+- Status from the charge state (0x1006 bits 2:0) first; the VBATT >= inhibit flag (0x1007 bit 5) is set during a near-full taper.
+- Recharge is VBAT based (bootloader sets CHGR_CFG2 0x1051 = 0x2c), threshold 4.20 V (raw 0x544a at 0x107e).
+- Verified: wall charger ~1 A in (AICL-limited), +0.4 A into a 98 % battery; PC port 500 mA; boot with the cable in. Not verified:
+  charging from a low battery (2 A FCC), a long discharge for gauge accuracy.
+
+**ADSP.** Upstream `remoteproc_adsp` + `firmware-name = "postmarketos/adsp.mdt"` (stock, signed for this phone), carve-out at the
+stock 0x95900000 (the Note 7 Pro needs 0x95300000). `QRTR_SMD`, `RPMSG_QCOM_GLINK_SMEM`, `QCOM_FASTRPC`, `QCOM_PD_MAPPER` are built
+in (as modules they load too late). Patches 0011-0013 from the Note 7 Pro port (pd-mapper one entry per domain + `qcom,sm6150`
+match, glink early intents, rpmhpd MSS). Boots in 0.6 s at ~5 s uptime; channels `IPCRTR`, `apr_audio_svc`, `apr_apps2`, fastrpc.
+
+**Modem.** DTS nodes added (talos.dtsi/QCS615 has none): `smp2p-mpss` (SMEM 435/428, SPI 451, `apss_shared 14`, entries
+master/slave-kernel, wlan, ipa), `remoteproc_mpss` (`qcom,sm8150-mpss-pas`, pas-id 4, wdog SPI 266, glink edge SPI 449 /
+`apss_shared 12`, `firmware-name = "postmarketos/modem.mdt"`), `rmtfs@a1dff000` (0x282000 with guard pages, client-id 1,
+`MSS_MSA` VMID; the stock tree allocates it dynamically), IPA v4.2 (`qcom,sc7180-ipa`, SPI 311/432, SIDs 0x1520/0x1522).
+- `rmtfs -s` starts the modem itself (`auto_boot = false` otherwise). Firmware: `MPSS.AT.4.4.c6 ... RENNELL_GEN_PACK`.
+- **IPA firmware: this phone ships `ipa_fws` (stock `qcom,ipa_fws`, PAS 15), so the AP must load it: `qcom,gsi-loader = "self"`,
+  `memory-region = <&ipa_fw_mem>`, `firmware-name = "postmarketos/ipa_fws.mdt"`.** With the Note 7 Pro's `modem-init` the modem never
+  raised `ipa-clock-query`/`ipa-setup-ready`, there was no `rmnet_ipa0`, and ModemManager found no modem; a modem started after IPA
+  was loaded stalled ("DOG detects stalled initialization") after 40 s.
+- ModemManager 1.25.95 uses the `qcom-soc` plugin (`qrtr0` + `rmnet_ipa0`); data goes over `qmapmux0.0`.
+- Data off once failed: ModemManager sent WDS Stop Network with handle `FF:FF:FF:FF` (it had lost the real one), the modem said
+  `InvalidHandle`, MM stayed "connected" and NetworkManager left the WWAN radio off, so the toggle never came back. Seen after
+  restarting the modem/IPA by hand under a running MM; not reproducible after a clean boot (off/on and autoconnect work). Recover with
+  `nmcli radio wwan on`; if it recurs, capture `mmcli -G DEBUG` logs of the Start Network.
+- `qmi-utils` (qmicli) is installed for debugging; this firmware rejects the WDS autoconnect query (`InvalidOperation`).
+
 ## Packaging the v2 boot image
 
 `mainline/mk-bootimg-v2.sh <Image> <dtb> <ramdisk> [out.img]` with `PMOS_BOOT_UUID`/`PMOS_ROOT_UUID` set
@@ -489,4 +526,5 @@ phone (display, touch, Wi-Fi, modem, audio out work; GPU renders but hangs under
 | `mainline/build-dtb.sh` | compiles the DTS to a DTB without rebuilding the kernel package (fast loop) |
 | `mainline/dummy-overlay.dts` | the dtbo experiment (ABL rejected it) |
 | `mainline/NOTES.md` | facts pulled from the stock device tree |
+| `tools/install-modem-userspace.sh` | installs rmtfs/tqftpserv/qrtr/ModemManager on the phone from the PC, enables them, optional APN |
 | `tools/` | lpunpack.py (super.img), hwprobe.sh, evrec.py, vtype.py, gltest.py (off-screen OpenGL ES test on the render node), run-phosh.sh (Phosh as root, no lock-screen password works), run-phosh-user.sh (Phosh as `user` with a PAM service, takes a duration), i2cprobe.py (probe the touch I2C bus), i2c3probe.py (read-only probe of the chips on i2c3) |

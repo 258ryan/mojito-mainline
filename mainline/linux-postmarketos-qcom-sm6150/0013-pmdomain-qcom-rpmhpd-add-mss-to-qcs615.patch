@@ -1,0 +1,25 @@
+From: postmarketOS mojito port
+Subject: [PATCH] pmdomain: qcom: rpmhpd: add MSS to qcs615
+
+qcom_q6v5_pas attaches the cx and mss proxy domains for the modem; without MSS the attach fails
+with -ENODATA. Patch 0013 of github.com/VipinVIP/violet-sm6150-mainline (MIT), unchanged.
+---
+diff --git a/drivers/pmdomain/qcom/rpmhpd.c b/drivers/pmdomain/qcom/rpmhpd.c
+index 919efa34e..55442cc4c 100644
+--- a/drivers/pmdomain/qcom/rpmhpd.c
++++ b/drivers/pmdomain/qcom/rpmhpd.c
+@@ -912,6 +912,14 @@ static const struct rpmhpd_desc qcs8300_desc = {
+ static struct rpmhpd *qcs615_rpmhpds[] = {
+ 	[RPMHPD_CX] = &cx,
+ 	[RPMHPD_CX_AO] = &cx_ao,
++	/*
++	 * The modem (mpss) votes on the MSS rail: qcom_q6v5_pas's
++	 * mpss_resource_init attaches proxy power domains "cx" and "mss", and
++	 * without this entry qcom_pas_pds_attach() fails with -ENODATA, which
++	 * is what has kept mpss - and therefore the WLAN firmware bootstrap -
++	 * off on violet.
++	 */
++	[RPMHPD_MSS] = &mss,
+ };
+ 
+ static const struct rpmhpd_desc qcs615_desc = {

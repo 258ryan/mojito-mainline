@@ -1,0 +1,41 @@
+From: postmarketOS mojito port
+Subject: [PATCH] soc: qcom: pd-mapper: one entry per domain on qcs615, match sm6150
+
+The root domains must answer tms/pdr_enabled, otherwise the modem stalls ~40 s after boot and the
+ADSP audio PD never registers. Adapted from patch 0011 of github.com/VipinVIP/violet-sm6150-mainline
+(MIT), rebased on 7.4-rc4.
+---
+diff --git a/drivers/soc/qcom/qcom_pd_mapper.c b/drivers/soc/qcom/qcom_pd_mapper.c
+index 64ca99d7f..f732252cc 100644
+--- a/drivers/soc/qcom/qcom_pd_mapper.c
++++ b/drivers/soc/qcom/qcom_pd_mapper.c
+@@ -435,10 +435,18 @@ static const struct qcom_pdm_domain_data *qcs404_domains[] = {
+ 
+ static const struct qcom_pdm_domain_data *qcs615_domains[] = {
+ 	&adsp_audio_pd,
+-	&adsp_root_pd,
++	/*
++	 * One entry per domain: the root domains must answer "tms/pdr_enabled"
++	 * (PDR clients such as q6afe/q6asm ask for the root first), and the
++	 * modem firmware queries it on msm/modem/root_pd while it initialises;
++	 * without it the modem stalls until its watchdog fires ~40 s later.
++	 * Same layout as sc7180, which shares the modem-hosted WLAN setup.
++	 * From the Redmi Note 7 Pro port (github.com/VipinVIP/violet-sm6150-mainline).
++	 */
++	&adsp_root_pd_pdr,
+ 	&adsp_sensor_pd,
+ 	&cdsp_root_pd,
+-	&mpss_root_pd,
++	&mpss_root_pd_gps_pdr,
+ 	&mpss_wlan_pd,
+ 	NULL,
+ };
+@@ -638,6 +646,8 @@ static const struct of_device_id qcom_pdm_domains[] __maybe_unused = {
+ 	{ .compatible = "qcom,qcm6490", .data = sc7280_domains, },
+ 	{ .compatible = "qcom,qcs404", .data = qcs404_domains, },
+ 	{ .compatible = "qcom,qcs615", .data = qcs615_domains, },
++	/* SM6150 phones (Xiaomi mojito, violet): same PD layout as qcs615 */
++	{ .compatible = "qcom,sm6150", .data = qcs615_domains, },
+ 	{ .compatible = "qcom,qcs8300", .data = qcs8300_domains, },
+ 	{ .compatible = "qcom,sa8775p", .data = sa8775p_domains, },
+ 	{ .compatible = "qcom,sc7180", .data = sc7180_domains, },

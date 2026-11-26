@@ -14,10 +14,9 @@ diff -urN a/arch/arm64/boot/dts/qcom/Makefile b/arch/arm64/boot/dts/qcom/Makefil
  dtb-$(CONFIG_ARCH_QCOM)	+= sm6125-xiaomi-laurel-sprout.dtb
  dtb-$(CONFIG_ARCH_QCOM)	+= sm6125-xiaomi-willow.dtb
  dtb-$(CONFIG_ARCH_QCOM)	+= sm6350-sony-xperia-lena-pdx213.dtb
-diff -urN a/arch/arm64/boot/dts/qcom/sm6150-xiaomi-mojito.dts b/arch/arm64/boot/dts/qcom/sm6150-xiaomi-mojito.dts
 --- a/arch/arm64/boot/dts/qcom/sm6150-xiaomi-mojito.dts	1970-01-01 05:00:00.000000000 +0500
-+++ b/arch/arm64/boot/dts/qcom/sm6150-xiaomi-mojito.dts	2026-11-26 14:25:46.000000000 +0500
-@@ -0,0 +1,633 @@
++++ b/arch/arm64/boot/dts/qcom/sm6150-xiaomi-mojito.dts	2026-11-26 16:40:05.341347065 +0500
+@@ -0,0 +1,935 @@
 +// SPDX-License-Identifier: BSD-3-Clause
 +/*
 + * Xiaomi Redmi Note 10 (mojito / sunny), SM6150 "Talos".
@@ -33,6 +32,7 @@ diff -urN a/arch/arm64/boot/dts/qcom/sm6150-xiaomi-mojito.dts b/arch/arm64/boot/
 +/dts-v1/;
 +
 +#include <dt-bindings/gpio/gpio.h>
++#include <dt-bindings/iio/qcom,spmi-vadc.h>
 +#include <dt-bindings/input/linux-event-codes.h>
 +#include <dt-bindings/leds/common.h>
 +#include <dt-bindings/pinctrl/qcom,pmic-gpio.h>
@@ -156,6 +156,21 @@ diff -urN a/arch/arm64/boot/dts/qcom/sm6150-xiaomi-mojito.dts b/arch/arm64/boot/
 +		wlan_msa_mem: wlan-msa@93900000 {
 +			reg = <0x0 0x93900000 0x0 0x200000>;
 +			no-map;
++		};
++
++		/*
++		 * rmtfs shared memory (modem file access through the rmtfs daemon). The vendor tree
++		 * allocates it dynamically (qcom,sharedmem-uio reg = <0 0x280000>, guard memory), so this
++		 * is a fixed, otherwise unused DRAM range above cdsp-sec (ends 0xa1600000), 0x280000 plus a
++		 * guard page on each side. Same placement as the Redmi Note 7 Pro port.
++		 */
++		rmtfs_mem: rmtfs@a1dff000 {
++			compatible = "qcom,rmtfs-mem";
++			reg = <0x0 0xa1dff000 0x0 0x282000>;
++			no-map;
++			qcom,client-id = <1>;
++			qcom,use-guard-pages;
++			qcom,vmid = <QCOM_SCM_VMID_MSS_MSA>;
 +		};
 +
 +		cont_splash_mem: cont-splash@9c000000 {
@@ -438,6 +453,16 @@ diff -urN a/arch/arm64/boot/dts/qcom/sm6150-xiaomi-mojito.dts b/arch/arm64/boot/
 +	reg = <0x0 0x95900000 0x0 0x2200000>;
 +};
 +
++/*
++ * ADSP (audio, sensors). Stock firmware from the phone's modem partition, signed for this device.
++ * It speaks legacy APR, not AudioReach, so talos.dtsi's gpr/q6apm children stay unused (the
++ * firmware never opens "adsp_apps"); APR nodes come with the sound card.
++ */
++&remoteproc_adsp {
++	firmware-name = "postmarketos/adsp.mdt";
++	status = "okay";
++};
++
 +&pil_gpu_mem {
 +	reg = <0x0 0x97b15000 0x0 0x2000>;
 +};
@@ -593,6 +618,155 @@ diff -urN a/arch/arm64/boot/dts/qcom/sm6150-xiaomi-mojito.dts b/arch/arm64/boot/
 +};
 +
 +/*
++ * PM6150 ADC channels for the battery and charger, copied from the stock vadc@3100 node (same
++ * channel numbers and pre-scaling). bat_therm (0x4a, 100k pull-up) needs kernel patch 0009: without
++ * it the adc5 table has no entry for the channel and the whole ADC probe fails.
++ */
++&pm6150_adc {
++	channel@7 {
++		reg = <ADC5_USB_IN_I>;
++		qcom,pre-scaling = <1 1>;
++		label = "usb_in_i_uv";
++	};
++
++	channel@8 {
++		reg = <ADC5_USB_IN_V_16>;
++		qcom,pre-scaling = <1 16>;
++		label = "usb_in_v_div_16";
++	};
++
++	channel@9 {
++		reg = <ADC5_CHG_TEMP>;
++		qcom,pre-scaling = <1 1>;
++		label = "chg_temp";
++	};
++
++	channel@4a {
++		reg = <ADC5_BAT_THERM_100K_PU>;
++		qcom,ratiometric;
++		qcom,hw-settle-time = <200>;
++		qcom,pre-scaling = <1 1>;
++		label = "bat_therm";
++	};
++
++	channel@84 {
++		reg = <ADC5_VBAT_SNS>;
++		qcom,pre-scaling = <1 3>;
++		label = "vbat_sns";
++	};
++};
++
++/*
++ * Battery: the stock profile "m305-nvt-5000mah" (qcom,battery-data). Float voltage 4.45 V. The OCV
++ * tables are its pc-temp-v1-lut (discharge OCV vs. state of charge at 0/10/25/40/50 C), converted
++ * from 100 uV units; the 9..1 % rows are kept, duplicates dropped.
++ */
++/ {
++	battery: battery {
++		compatible = "simple-battery";
++		device-chemistry = "lithium-ion-polymer";
++		voltage-min-design-microvolt = <3400000>;
++		voltage-max-design-microvolt = <4450000>;
++		charge-full-design-microamp-hours = <5000000>;
++		constant-charge-current-max-microamp = <2000000>;	/* conservative; vendor uses up to 6 A with the bq2597x pump */
++		factory-internal-resistance-micro-ohms = <120000>;
++		ocv-capacity-celsius = <0 10 25 40 50>;
++		/* 0 C */
++		ocv-capacity-table-0 = <4416500 100 4397700 98 4376700 96 4354700 94 4331900 92 4308200 90
++			4284300 88 4260200 86 4236000 84 4212300 82 4188900 80 4165900 78
++			4143400 76 4121400 74 4100100 72 4079800 70 4059700 68 4039000 66
++			4018400 64 3999100 62 3982100 60 3964800 58 3943400 56 3917800 54
++			3897200 52 3883700 50 3873100 48 3864800 46 3858300 44 3852400 42
++			3846700 40 3841400 38 3836400 36 3831700 34 3827400 32 3823500 30
++			3820000 28 3815600 26 3808000 24 3797700 22 3786400 20 3772900 18
++			3757700 16 3740000 14 3727200 12 3718500 10 3716400 9 3715200 8
++			3711100 7 3698900 6 3662100 5 3612600 4 3549000 3 3461300 2
++			3319900 1 3000000 0>;
++		/* 10 C */
++		ocv-capacity-table-1 = <4426200 100 4407600 98 4388100 96 4368000 94 4346800 92 4324000 90
++			4300100 88 4276100 86 4251600 84 4227100 82 4203100 80 4179300 78
++			4156200 76 4133400 74 4111400 72 4090700 70 4070700 68 4050900 66
++			4031800 64 4012000 62 3988700 60 3961600 58 3937500 56 3917800 54
++			3900900 52 3888400 50 3879000 48 3870300 46 3861600 44 3853400 42
++			3845800 40 3838500 38 3832000 36 3826500 34 3821600 32 3817000 30
++			3813000 28 3808500 26 3801200 24 3790900 22 3779300 20 3766100 18
++			3751200 16 3733700 14 3720200 12 3712800 10 3710200 9 3708500 8
++			3705200 7 3692800 6 3655900 5 3606900 4 3543800 3 3456400 2
++			3315600 1 3000000 0>;
++		/* 25 C */
++		ocv-capacity-table-2 = <4434100 100 4418300 98 4398600 96 4378800 94 4358300 92 4336700 90
++			4313700 88 4289500 86 4265100 84 4240300 82 4215700 80 4191600 78
++			4167700 76 4144300 74 4121400 72 4099100 70 4077800 68 4057200 66
++			4037500 64 4019300 62 3999300 60 3972600 58 3943400 56 3922700 54
++			3907800 52 3895000 50 3883300 48 3872800 46 3862600 44 3852600 42
++			3843500 40 3835400 38 3828100 36 3821500 34 3815800 32 3810300 30
++			3805100 28 3799900 26 3792800 24 3782900 22 3771500 20 3758900 18
++			3744600 16 3727800 14 3714600 12 3707000 10 3705000 9 3703100 8
++			3700200 7 3686100 6 3649000 5 3600200 4 3537100 3 3450600 2
++			3311300 1 3000000 0>;
++		/* 40 C */
++		ocv-capacity-table-3 = <4435900 100 4418500 98 4400200 96 4381100 94 4361200 92 4340100 90
++			4317600 88 4293600 86 4269200 84 4244600 82 4220000 80 4195900 78
++			4172000 76 4148500 74 4125400 72 4102800 70 4081000 68 4060000 66
++			4039900 64 4021800 62 4002800 60 3978200 58 3949600 56 3927600 54
++			3912000 52 3898600 50 3885400 48 3873200 46 3862200 44 3852300 42
++			3843200 40 3834800 38 3826900 36 3819600 34 3812700 32 3806100 30
++			3799600 28 3793200 26 3785000 24 3774400 22 3762600 20 3749900 18
++			3736000 16 3720000 14 3707300 12 3700400 10 3698200 9 3696600 8
++			3693100 7 3676500 6 3639600 5 3591200 4 3528800 3 3442800 2
++			3306600 1 3000000 0>;
++		/* 50 C */
++		ocv-capacity-table-4 = <4437200 100 4419600 98 4401400 96 4382400 94 4362300 92 4341100 90
++			4319000 88 4295700 86 4271800 84 4247500 82 4222700 80 4198400 78
++			4174100 76 4150200 74 4127000 72 4104300 70 4082600 68 4061700 66
++			4041600 64 4023000 62 4004000 60 3980400 58 3952400 56 3929800 54
++			3913800 52 3900200 50 3886700 48 3873800 46 3862300 44 3852200 42
++			3843000 40 3834400 38 3826500 36 3818900 34 3811700 32 3804500 30
++			3796900 28 3789000 26 3779800 24 3768900 22 3756700 20 3743200 18
++			3728600 16 3711900 14 3700300 12 3694500 10 3692500 9 3690600 8
++			3686200 7 3666700 6 3629400 5 3580600 4 3517600 3 3430700 2
++			3291800 1 3000000 0>;
++	};
++};
++
++&pm6150_lsid0 {
++	/*
++	 * QGauge (fuel gauge) and its SDAM. Driven read-only by qcom_qg_lite (patch 0010): the bootloader
++	 * leaves it measuring; SDAM holds the last saved SOC (0x47) and the learned capacity (0x68).
++	 */
++	qgauge@4800 {
++		compatible = "qcom,pm6150-qg";
++		reg = <0x4800>, <0xb600>;
++		io-channels = <&pm6150_adc ADC5_BAT_THERM_100K_PU>,
++			      <&pm6150_adc ADC5_USB_IN_V_16>;
++		io-channel-names = "batt_therm", "usb_in_v";
++		monitored-battery = <&battery>;
++		power-supplies = <&pm6150_charger>;	/* status comes from the charger while plugged in */
++	};
++
++	/*
++	 * SMB5 charger (patch 0008). The module is blacklisted in /etc/modprobe.d until it is tested by
++	 * hand: it reprograms the input current limit and charging enable.
++	 */
++	pm6150_charger: charger@1000 {
++		compatible = "qcom,pm8150b-charger";
++		reg = <0x1000>;
++
++		interrupts = <0x0 0x13 0x4 IRQ_TYPE_EDGE_BOTH>,
++			     <0x0 0x12 0x2 IRQ_TYPE_EDGE_BOTH>,
++			     <0x0 0x16 0x1 IRQ_TYPE_EDGE_RISING>,
++			     <0x0 0x13 0x7 IRQ_TYPE_EDGE_RISING>;
++		interrupt-names = "usbin-plugin", "bat-ov", "wdog-bark", "usbin-icl-change";
++
++		io-channels = <&pm6150_adc ADC5_USB_IN_I>,
++			      <&pm6150_adc ADC5_USB_IN_V_16>;
++		io-channel-names = "usb_in_i_uv", "usb_in_v_div_16";
++
++		monitored-battery = <&battery>;
++	};
++};
++
++/*
 + * Display: the real MDSS/DPU/DSI stack. The panel is a Samsung-style 1080x2400 AMOLED in video mode
 + * (stock node qcom,mdss_dsi_k7_38_0c_0a_video); brightness is the DCS 0x51 command, which the panel driver
 + * exposes as a backlight. The bootloader leaves the lab/ibb (LCDB) bias rails on and nothing here controls
@@ -651,3 +825,130 @@ diff -urN a/arch/arm64/boot/dts/qcom/sm6150-xiaomi-mojito.dts b/arch/arm64/boot/
 +	status = "okay";
 +};
 +
++/*
++ * Modem (MPSS) and IPA. All values are from the stock tree (qcom,mss@4080000 pas-id 4,
++ * qcom,smp2p-modem, the "modem" glink edge, qcom,ipa@1e00000 hw-ver 0x10); the layout follows the
++ * Redmi Note 7 Pro port (github.com/VipinVIP/violet-sm6150-mainline), which runs the same SoC's
++ * modem. talos.dtsi (QCS615) has no modem, so none of this exists upstream.
++ * The modem does not start on its own (auto_boot = false for sm8150-mpss-pas): start it with
++ * echo start > /sys/class/remoteproc/remoteprocN/state after rmtfs and pd-mapper are up.
++ */
++&soc {
++	smp2p-mpss {
++		compatible = "qcom,smp2p";
++		qcom,smem = <435>, <428>;
++		interrupts = <GIC_SPI 451 IRQ_TYPE_EDGE_RISING 0>;
++		mboxes = <&apss_shared 14>;
++		qcom,local-pid = <0>;
++		qcom,remote-pid = <1>;
++
++		mpss_smp2p_out: master-kernel {
++			qcom,entry-name = "master-kernel";
++			#qcom,smem-state-cells = <1>;
++		};
++
++		mpss_smp2p_in: slave-kernel {
++			qcom,entry-name = "slave-kernel";
++			interrupt-controller;
++			#interrupt-cells = <2>;
++		};
++
++		/* used by the modem to report on the WLAN subsystem it hosts */
++		mpss_smp2p_wlan_in: wlan {
++			qcom,entry-name = "wlan";
++			interrupt-controller;
++			#interrupt-cells = <2>;
++		};
++
++		/* IPA clock query / setup-ready handshake */
++		mpss_smp2p_ipa_out: ipa-ap-to-modem {
++			qcom,entry-name = "ipa";
++			#qcom,smem-state-cells = <1>;
++		};
++
++		mpss_smp2p_ipa_in: ipa-modem-to-ap {
++			qcom,entry-name = "ipa";
++			interrupt-controller;
++			#interrupt-cells = <2>;
++		};
++	};
++
++	/*
++	 * IPA v4.2 (stock qcom,ipa-hw-ver = 0x10), the same as sc7180. Unlike the Redmi Note 7 Pro,
++	 * this phone ships ipa_fws (stock qcom,ipa_fws node, PAS id 15), so the AP loads the GSI
++	 * firmware into ipa-fw@97b00000 ("self"); with "modem" the modem never starts the handshake.
++	 */
++	ipa: ipa@1e40000 {
++		compatible = "qcom,sc7180-ipa";
++		reg = <0x0 0x01e40000 0x0 0x7000>,
++		      <0x0 0x01e47000 0x0 0x2000>,
++		      <0x0 0x01e04000 0x0 0x2c000>;
++		reg-names = "ipa-reg", "ipa-shared", "gsi";
++
++		iommus = <&apps_smmu 0x1520 0x0>,
++			 <&apps_smmu 0x1522 0x0>;
++
++		interrupts-extended = <&intc GIC_SPI 311 IRQ_TYPE_EDGE_RISING 0>,
++				      <&intc GIC_SPI 432 IRQ_TYPE_LEVEL_HIGH 0>,
++				      <&mpss_smp2p_ipa_in 0 IRQ_TYPE_EDGE_RISING>,
++				      <&mpss_smp2p_ipa_in 1 IRQ_TYPE_EDGE_RISING>;
++		interrupt-names = "ipa", "gsi", "ipa-clock-query", "ipa-setup-ready";
++
++		clocks = <&rpmhcc RPMH_IPA_CLK>;
++		clock-names = "core";
++
++		interconnects = <&aggre1_noc MASTER_IPA QCOM_ICC_TAG_ALWAYS
++				 &mc_virt SLAVE_EBI1 QCOM_ICC_TAG_ALWAYS>,
++				<&aggre1_noc MASTER_IPA QCOM_ICC_TAG_ALWAYS
++				 &system_noc SLAVE_IMEM QCOM_ICC_TAG_ALWAYS>,
++				<&gem_noc MASTER_APPSS_PROC QCOM_ICC_TAG_ALWAYS
++				 &config_noc SLAVE_IPA_CFG QCOM_ICC_TAG_ALWAYS>;
++		interconnect-names = "memory", "imem", "config";
++
++		qcom,qmp = <&aoss_qmp>;
++
++		qcom,smem-states = <&mpss_smp2p_ipa_out 0>,
++				   <&mpss_smp2p_ipa_out 1>;
++		qcom,smem-state-names = "ipa-clock-enabled-valid",
++					"ipa-clock-enabled";
++
++		qcom,gsi-loader = "self";
++		memory-region = <&ipa_fw_mem>;
++		firmware-name = "postmarketos/ipa_fws.mdt";
++	};
++
++	remoteproc_mpss: remoteproc@4080000 {
++		compatible = "qcom,sm8150-mpss-pas";
++		reg = <0x0 0x04080000 0x0 0x4040>;
++
++		interrupts-extended = <&intc GIC_SPI 266 IRQ_TYPE_EDGE_RISING 0>,
++				      <&mpss_smp2p_in 0 IRQ_TYPE_EDGE_RISING>,
++				      <&mpss_smp2p_in 1 IRQ_TYPE_EDGE_RISING>,
++				      <&mpss_smp2p_in 2 IRQ_TYPE_EDGE_RISING>,
++				      <&mpss_smp2p_in 3 IRQ_TYPE_EDGE_RISING>,
++				      <&mpss_smp2p_in 7 IRQ_TYPE_EDGE_RISING>;
++		interrupt-names = "wdog", "fatal", "ready", "handover", "stop-ack", "shutdown-ack";
++
++		clocks = <&rpmhcc RPMH_CXO_CLK>;
++		clock-names = "xo";
++
++		power-domains = <&rpmhpd RPMHPD_CX>, <&rpmhpd RPMHPD_MSS>;	/* MSS: patch 0013 */
++		power-domain-names = "cx", "mss";
++
++		memory-region = <&mpss_mem>;
++
++		qcom,qmp = <&aoss_qmp>;
++
++		qcom,smem-states = <&mpss_smp2p_out 0>;
++		qcom,smem-state-names = "stop";
++
++		firmware-name = "postmarketos/modem.mdt";
++
++		glink-edge {
++			interrupts-extended = <&intc GIC_SPI 449 IRQ_TYPE_EDGE_RISING 0>;
++			mboxes = <&apss_shared 12>;
++			label = "mpss";
++			qcom,remote-pid = <1>;
++		};
++	};
++};
