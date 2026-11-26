@@ -1,0 +1,39 @@
+/* TEST "manual": WCN rails under userspace control, UART7 as a plain tty */
+/ {
+	aliases {
+		serial1 = &uart7;
+	};
+
+	wcn-io { compatible = "regulator-output"; vout-supply = <&vreg_l10a>; };
+	wcn-xo { compatible = "regulator-output"; vout-supply = <&vreg_l1c>; };
+	wcn-rf { compatible = "regulator-output"; vout-supply = <&vreg_l2c>; };
+	wcn-ch0 { compatible = "regulator-output"; vout-supply = <&vreg_l10c>; };
+	wcn-cxmx { compatible = "regulator-output"; vout-supply = <&vreg_l9a>; };
+};
+
+&vreg_l10a {
+	/delete-property/ regulator-always-on;
+};
+
+&vreg_l9a {
+	regulator-min-microvolt = <640000>;
+	regulator-max-microvolt = <640000>;
+};
+
+&vreg_l10c {
+	regulator-min-microvolt = <3312000>;
+	regulator-max-microvolt = <3312000>;
+};
+
+&qupv3_id_1 {
+	status = "okay";
+};
+
+&uart7 {
+	status = "okay";
+};
+
+&qup_uart7_cts { bias-disable; drive-strength = <2>; };
+&qup_uart7_rts { bias-pull-down; drive-strength = <2>; };
+&qup_uart7_tx { bias-pull-up; drive-strength = <2>; };
+&qup_uart7_rx { bias-disable; drive-strength = <2>; };

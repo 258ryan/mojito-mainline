@@ -47,7 +47,8 @@ DTS-only changes: `mainline/build-dtb.sh` (no package build).
 1. **Audio:** port `sm7150-mainline/linux` (tag v7.1_rc3) `drivers/pinctrl/qcom/pinctrl-sm7150-lpass-lpi.c` to SM6150 (LPI block at
    **0x62b52000**; 0x62b40000 is the SSC block that hangs the SoC), then macros + SoundWire + WCD937x + sound card from their
    `sm7150.dtsi` / `sm7150-xiaomi-*.dts`. Speaker = WCD937x AUX_OUT -> aw87xxx analog PA (i2c3 0x58/0x5b, chip id 0x59, not aw87390).
-2. **Wi-Fi:** only with new input (see the paragraph above; the user was told no one else to ask is known, so the Android state diff is the best lead).
+2. **Wi-Fi:** the 2026-11-27 Bluetooth A/B test (section "Wi-Fi") shows the WCN3990 chip itself does not respond (BT on UART7 also fails, rails/clocks verified in the PMIC).
+   Next: run the BT power-on on slot A (downstream) and diff the hardware state; see the bullet "BLUETOOTH A/B TEST".
 3. Volume-up key (pm6150l GPIO 2 in the sm7125 Xiaomi tree), PMIC haptics, Bluetooth (WCN3990 on UART; sm7125/sm7150 trees have the
    node), sensors (ADSP sensor core, QMI 400; no mainline driver), time sync at boot, suspend, KWin/Finder.
 
@@ -638,6 +639,58 @@ Later tests (2026-11-26 evening):
   opening `/dev/subsys_ipa_fws` made the phone reset twice with NO kernel message (hard reset; /var/log is persistent there, `dmesg` snapshots every second showed nothing). No Wi-Fi data from slot A; do not repeat without a new idea.
 - **violet-sm6150-mainline (github.com/VipinVIP/violet-sm6150-mainline) check:** its Wi-Fi node/modem node/smp2p/IPA match ours; `violet-vbat.c` is a battery-gauge driver (NOT a WLFW tool); its patches 0010/0015 act after the handshake. Qualcomm's qcom-deb-images issue #667
   (RB1, WCN3950, kernel 7.2) shows the same `capability req rejected: 119` intermittently (1 in 100), open, no cause.
+- **BLUETOOTH A/B TEST (2026-11-27): the WCN3990 does not answer on its own UART either, so the 119 is a chip-level problem, not a WLFW/modem protocol one.**
+  BT shares the chip but talks to the AP directly (no modem). Test DTB = repo DTS + `mainline/wip/bt-uart7-test.dtsi`: `qcom,wcn3990-bt` on UART7 (QUP SE7 0xa8c000,
+  gpio10-13 func1 = stock `qcom,qup_uart@0xa8c000` / qup13; safe pins), supplies from the PMU node, `qupv3_id_1` enabled. `hci_uart` is blacklisted (`/etc/modprobe.d/bt-test.conf`);
+  stock `crbtfw*.tlv`/`crnv*.bin` copied to `/lib/firmware/qca/`. Result every time: `setting up wcn399x` -> `command 0xfc00 tx timeout` -> `Reading QCA version information failed (-110)`,
+  3 retries. UART TX works (tx counter rises), rx stays 0 apart from ONE garbage byte right after some power-ons (`Frame reassembly failed (-84)`, typical of the chip's TX line rising).
+  Verified IN THE PMIC (regmap 0-01/0-05 LDO STATUS1 0x08 VREG_READY + EN_CTL 0x46 + VSET 0x42) while hci_uart powers the chip: L10a 1800 mV, L1c 1800, L2c 1304, L10c 3312, L9a (cx-mx) 728, all ready.
+  Clocks (PMIC 0-00: 0x5400 RF1, 0x5500 RF2, 0x5600 RF3, 0x5300 LN_BB3; EN_CTL 0x46, STATUS1 0x08): RF2 runs even unvoted (status 0xc0 = pin/other-master), RF3/LN_BB3 are off.
+  Tried with no change: RF_CLK2 as the PMU `clocks`; RF_CLK3, LN_BB_CLK2/3 voted on (mainline qcs615 clk-rpmh lacks RF_CLK3, so via the test module `mainline/wip/rpmhvote/`,
+  `echo rfclka3=1 > /sys/module/rpmhvote/parameters/vote`; VRM clock enable is at cmd-db addr **+4**); L9a always-on 640 mV; L10c 3.312 V; stock UART biases. cmd-db has lnbclka1-3, rfclka1-3.
+  So: rails on, clocks on, UART path right, chip silent. Remaining suspects are board-level things not in our DTS (an enable/strap line or load switch, e.g. a PMIC GPIO) or chip state.
+  **Best next step: the same BT power-on on slot A (downstream 4.14, its own bt_power driver: power via /dev/btpower ioctl, raw HCI 0xfc00 on /dev/ttyHS1 at 115200).** If it answers there,
+  dump TLMM + PMIC GPIO + PMIC LDO/clock registers there with BT on and diff against mainline: whatever differs is what both BT and Wi-Fi are missing.
+  **SW_CTRL found: TLMM gpio102** (`qca,bt-sw-ctrl-gpio = <&tlmm 102 0>` in the NetErnels sunny DTB; input from the chip). With L10a NOT always-on (test DTB `bt-t10`):
+  gpio102 reads low with the chip off and goes high within 100 ms of the pwrseq power-up, i.e. the chip's PMU/IO really come up; still no UART answer after that clean
+  full power cycle, so a latched chip state is ruled out. (With L10a always-on, gpio102 stays high all the time.) Could go into the PMU node as `swctrl-gpios` (driver ignores it for wcn3990).
+  Checked and identical to ours / nothing new: stock + NetErnels + fiqri19102002/android_kernel_xiaomi_mojito Bluetooth node (only L1c/L2c/L10c, current level 1, no GPIO, no clock),
+  downstream `bluetooth-power.c` (rails only), AlphaDroid device tree (standard rfkill/btpower/cnss-daemon), PMIC GPIOs (stock pinctrl only vol-up/PWM/camera; none output-high live;
+  PM6150 gpio9/10 are in func1 live, unexplained), stock fixed regulators (cameras + dummy), PMIC clkdivs (audio MCLK only). GENI UART clock 7.3728 MHz, no baud errors.
+  **Manual UART bring-up (2026-11-27), no Bluetooth driver:** DTB = repo DTS minus PMU/wifi nodes + `mainline/wip/wcn-manual-test.dtsi` (each WCN rail as a `regulator-output`,
+  UART7 as plain /dev/ttyHS1); `userspace-consumer.c` built as a module with the RPMh "unknown state" check removed (RPMh regulators return -EINVAL before the first vote).
+  `mainline/wip/wcnuart.py` powers L10a/L1c/L2c/L10c(/L9a) by hand and tries 12 start-ups: mainline (0xC0@2400, 0xFC@115200), 0xFC@2400, no off pulse, no pulses, +cx-mx,
+  RTS/CTS, 500 ms after the pulse, command at 3 Mbaud, HCI reset, slow rail ramp. **All: no reply, CTS never asserted.** Turning the rails off from Linux turns L1c/L2c/L10c off
+  in the PMIC, but L10a and L9a stay on (another RPMh master, probably the modem, votes them once used), so SW_CTRL stays high after the first trial; that matches stock (L10a always on).
+  **Cold-start repeat (one variant per reboot, `COLD=1` refuses a trial unless gpio102 reads low first):** A, B (0xFC@2400), D, F (+cx-mx), G (RTS/CTS), H, L all started from a true
+  cold chip (sw_ctrl L->H) and all got no reply, CTS never asserted. (I, C not repeated cold.) ~7 quick reboots in a row tripped the ABL boot counter (phone stopped in fastboot;
+  `fastboot set_active b` fixed it), so space reboots or re-arm the slot. Stock msm_geni_serial.c has no WCN-specific wake byte/baud (only PM-vote ioctls, a host wake-up byte, loopback).
+  Conclusion: rails, clocks (RF1/RF2/RF3/LN_BB2/3), UART pins and every reasonable pulse/baud sequence are ruled out; the chip's PMU comes up but its BT/WLAN core never boots.
+  Phone state after the tests: boot_b = r21 kernel + the `wcn-manual-test` DTB (no wifi/PMU node, L10a not always-on), harmless (hci_uart and ath10k_snoc blacklisted). Flash `bt-t3`/repo DTB to restore L10a always-on.
+- **STOCK MIUI REFERENCE (2026-11-27, rooted with Magisk; raw dumps are private in ~/.claude-work/pmos-mojito/android-dump-2026-11-27/, NOT in the repo):**
+  - **The chip is a WCN3950, not a WCN3990.** BT ROM answer under Android: SoC version 0x40070120, product ID 0x0f, ROM build 0x0102, patch 0x0001; the HAL loads
+    `cmbtfw12.tlv` + `cmnv12.bin` ("cm" = WCN3950). The stock DT says `qca,wcn3990` only because the downstream drivers treat the family alike. Mainline BT must be
+    `qcom,wcn3950-bt` with `qca/cmbtfw12.tlv` / `qca/cmnv12.bin` (we had copied the `cr*` WCN3990 files). Fits the `wcn3950_rfa_*` strings in wlanmdsp and the RB1 (WCN3950) 119 report.
+  - The Android BT HAL start-up is byte-for-byte what mainline hci_qca does (0xC0 @2400, reopen @115200, 0xFC, reopen with RTS/CTS, EDL version cmd 01 00 fc 01 19 ~125 ms later);
+    there the chip answers in 5 ms. So the mainline BT silence is NOT the UART sequence.
+  - **On Android the WCN rails never switch off:** with BT and Wi-Fi both off, L1c/L2c/L10c/L10a/L9a stay enabled (2 users each: icnss + bt_power) and `wlan` stays loaded.
+    icnss + the modem WLAN firmware bring the chip up at boot and keep it up; BT talks to an already-running chip. Working hypothesis: the WLAN platform init (the cap request,
+    which enables the RF chip's XO over WSI) is what starts the WCN3950 core, so the 119 failure also explains BT. UNPROVEN, but consistent with every mainline test.
+  - Android WLAN boot: wlan_pd up 14.89 s -> icnss QMI connected 14.897 -> cnss-daemon (2nd WLFW client) reads cal files and downloads **`regdb.bin` then `bdf_gl.bin`** at
+    14.951/14.955 -> `WLAN FW is ready` 17.28 s. **`bdf_gl.bin` differs from `bdwlan.bin`** (our board.bin); wlanmdsp.mbn is identical to ours. Files are in
+    `/vendor/firmware_mnt/image` (copies in the private dump, files/wlanfw/).
+  - Rail modes on Android: L1c, L2c, L10c, L9a = LPM (`idle`), L10a/L11a = HPM (`fast`); mainline uses HPM/auto. L10a also feeds the WCD937x codec.
+  - **Live trace of the Android WLAN bring-up** (Magisk post-fs-data script re-arms tracefs after init; trace in the private dump, trace/wlanboot-trace.txt):
+    QMI server up 12.1895 s -> icnss enables pm6150_l9 640 mV, pm6150l_l1 1.8 V, pm6150l_l2 1.304 V, pm6150l_l10 3.312 V in that order (12.1895-12.1944, ~1 ms each); per rail
+    RPMh writes voltage (addr+0), **mode = 4 (addr+8; PMIC5 LDO mode 4 = LPM)**, enable (addr+4). RPMh addrs: ldoa9 0x41b00, ldoc1 0x42200, ldoc2 0x40700, ldoc10 0x41800.
+    Then two SCM 0x42000c16 (hyp assign, MSA) at 12.1976/12.1998. cnss-daemon BDF regdb.bin 12.2529, bdf_gl.bin 12.2580. Nothing else WLAN-related from the AP
+    (no GPIO, no clock, no RF-clock vote) until `WLAN FW is ready` at 14.8188, when icnss drops and re-votes the rails. NOTE the rails come on only AFTER the WLFW server
+    appears (the modem's wlan_pd is already running); on mainline the rails were on before the modem booted.
+  - **Next mainline Wi-Fi tests, in order:** (1) ath10k downloads `regdb.bin` + `bdf_gl.bin` BEFORE the first cap request (never tested: wip/0017 only retried cap after
+    a failed one, which the firmware never answers); (2) WCN rails in LPM (`regulator-initial-mode = <RPMH_REGULATOR_MODE_LPM>`); (3) then BT as `qcom,wcn3950-bt` with cm* firmware.
+  - No debugfs in the MIUI kernel; tracefs works (regulator/clk/gpio/rpmh/spmi/scm/msm_bus events), but Android init stops a boot-time trace at ~3.5 s, before icnss.
+    The dumps also cover the live DTB (`fdt.dtb`), kernel config, sensors/registry, audio/mixer/tinymix, fingerprint, overlays (auto-brightness), battery/charger,
+    CPU/cpufreq/idle/thermal, touch/tap-to-wake, display, USB (gadget configfs, DWC3/PHY) and persist.
 - **Still unknown:** what the modem's WLAN power-up waits ~200 ms for. Needs the modem's own log or a different angle (e.g. memory capture before `qcom_pas_shutdown`, risky).
 - sm7125-mainline (Redmi Note 9 Pro, same PMICs, same `wlan_mem` 0x93900000, Wi-Fi works, unpatched ath10k): 2 MB MSA +
   `qcom,msa-fixed-perm` + ch1 = L11c. With that config here: boots fine, MSA permission errors gone, still 119. The repo DTS now uses it.
@@ -652,6 +705,27 @@ centre (540,52) radius 37, from the stock overlay (`config_mainBuiltInDisplayCut
 `rounded_corner_radius` 119px, via the LineageOS mojito tree). Build with `pmbootstrap build --arch aarch64 gmobile` (without
 `--arch` it builds x86_64), install `gmobile` + `gmobile-udev` r1, restart Phosh. Upstream candidate for gmobile.
 
+### Camera (reference from stock MIUI, 2026-11-27; traces in the private dump, camera/)
+
+Sensors on this unit (`persist.vendor.camera.mi.module.info*`): wide **Sony IMX582**, ultra-wide **Sony IMX355**, macro **GalaxyCore GC02M1**, depth **OmniVision OV02B1B**,
+front **OmniVision OV13B10** (rear vendor id 07, front 01; the vendor also ships OFilm/Sunny/Semco module variants). Sensor detection is in userspace CamX; CCI at 0xac4a000.
+Power-up traced with tracefs while opening the camera app:
+- rear wide (camera 0): TLMM gpio47 (reset) low -> `camera_vana0_ldo` (PM6150L GPIO 9 switched) -> pm6150_l13 1.8 V -> titan_top_gdsc -> **MCLK0** -> gpio47 high -> CCI clocks
+  -> pm6150_l19 2.8 V (actuator) -> CSID/IFE/IPE.
+- front (camera 1): gpio38 (reset) low, gpio94 and gpio121 low -> pm6150_l13 1.8 V -> gpio94 high, gpio121 low, gpio38 high -> **MCLK2**.
+Mainline needs camss for SM6150/QCS615 plus sensor drivers (imx355, ov13b10 exist upstream; imx582 / gc02m1 / ov02b1b do not).
+
+### Audio, haptics, flash, charger, proximity (reference from stock MIUI, 2026-11-27; private dump, audio/ haptics/ flash/ charger/)
+
+- Sound card `sm6150-idp-snd-card`, mixer file **`mixer_paths_idp.xml`** (copy + ftm_test_config* in the private dump, audio/cfg/). Media playback trace (ASoC DAPM + I2C):
+  speaker = RX_MACRO RX1 -> RX INT2 -> WCD937x **AUX_OUT** -> AUX PGA -> **AW87xxx "SPK" at i2c-2 (QUP i2c3) 0x58**; earpiece ("handset" path) = RX0 -> RX INT0 -> HPHL/RDAC3
+  -> **EAR** -> **AW87xxx "Rcv" at 0x5b**; Android powers BOTH amps for media. Full amp init register sequences captured (22 writes to 0x58, 39 to 0x5b) in audio/trace-audio-clean.txt;
+  tinymix during playback in audio/tinymix-playing.txt.
+- Mics: `amic1` = ADC1 (SWR_MIC, TX DEC0); `amic2`/`amic3` = ADC2 with ADC2 MUX INP2/INP3; `handset-mic` / `dmic-endfire` = ADC1 + ADC2.
+- **Proximity is ultrasonic** (Elliptic Labs virtual sensor): `ultrasound-proximity*` mixer paths drive the earpiece and a mic. There is no proximity chip to look for.
+- Haptics: PM6150L haptics at SPMI sid 5 **0xbc00** (writes 0xbc41=07, 0xbc45=01, 0xbc44=b3, 0xbc47=01, 0xbc46=84 for an 800 ms buzz); TLMM gpio112 goes high too.
+- Torch: PM6150L flash at SPMI sid 5 **0xd300** (0xd343=07, 0xd340=13, 0xd346=80, 0xd34c=01). (0x31xx/0x35xx writes in both traces are ADC/thermal noise.)
+- Charger (unplug/replug trace, charger/): JEITA FCC 6 A, **float voltage 4.47 V**, termination -350 mA, QG full capacity 4539 mAh; vbus ~5.0 V on the PC port.
 ## Packaging the v2 boot image
 
 `mainline/mk-bootimg-v2.sh <Image> <dtb> <ramdisk> [out.img]` with `PMOS_BOOT_UUID`/`PMOS_ROOT_UUID` set

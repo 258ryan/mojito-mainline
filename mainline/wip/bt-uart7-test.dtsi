@@ -1,0 +1,48 @@
+/* TEST: WCN3990 Bluetooth on QUP SE7 (UART7, gpio10-13), as stock qcom,qup_uart@0xa8c000 + bt_wcn3990 */
+/ {
+	aliases {
+		serial1 = &uart7;
+	};
+};
+
+&qupv3_id_1 {
+	status = "okay";
+};
+
+&uart7 {
+	status = "okay";
+
+	bluetooth {
+		compatible = "qcom,wcn3990-bt";
+
+		vddio-supply = <&vreg_pmu_io>;
+		vddxo-supply = <&vreg_pmu_xo>;
+		vddrf-supply = <&vreg_pmu_rf>;
+		vddch0-supply = <&vreg_pmu_ch0>;
+
+		max-speed = <3200000>;
+	};
+};
+
+/* TEST: vote the 38.4 MHz PMIC RF clock for the WCN3990 reference input */
+&{/wcn3990-pmu} {
+	clocks = <&rpmhcc RPMH_RF_CLK2>;
+};
+
+/* TEST 3: stock-like WCN rails: cx-mx L9a on at 640 mV, ch0 L10c at 3.312 V */
+&vreg_l9a {
+	regulator-min-microvolt = <640000>;
+	regulator-max-microvolt = <640000>;
+	regulator-always-on;
+};
+
+&vreg_l10c {
+	regulator-min-microvolt = <3312000>;
+	regulator-max-microvolt = <3312000>;
+};
+
+/* stock pin biases: tx pull-up, rts pull-down, cts/rx no pull */
+&qup_uart7_cts { bias-disable; drive-strength = <2>; };
+&qup_uart7_rts { bias-pull-down; drive-strength = <2>; };
+&qup_uart7_tx { bias-pull-up; drive-strength = <2>; };
+&qup_uart7_rx { bias-disable; drive-strength = <2>; };
