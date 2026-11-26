@@ -722,6 +722,11 @@ Later tests (2026-11-26 evening):
   RO/VAL/RO/VAL/RO/VAL/VAL, same as mainline qcom_scm_assign_mem), one per MSA region. Stock icnss (fiqri tree icnss.c msa_perm_list/secure_list) and
   ath10k qmi.c map the same way: HLOS(0x3) -> MSS_MSA(0xF) RW + WLAN(0x18) RW, plus WLAN_CE(0x19) RW for non-secure regions; same VMID/PERM values
   (secure_buffer.h vs dt-bindings/firmware/qcom,scm.h); same point in the sequence (after msa_info, before msa_ready). Our assigns succeed.
+  (G) **Service-registry (PDR) listener for wlan_pd, like icnss: no change.** Android's kernel receives and ACKs "Indication received from
+  msm/modem/wlan_pd, state 0x1fffffff, trans-id 1" 4 ms before icnss's QMI connect; mainline ath10k has no PDR client at all. Test module
+  `mainline/wip/wlanpdr/` (pdr_add_lookup("wlan/fw", "msm/modem/wlan_pd"), loaded at boot via /etc/modules before the modem starts): UNINIT at modem
+  boot, UP indication trans-id 1 received and ACKed, DOWN/UP on every crash also ACKed - and the cap request still gets 119. The module stays installed
+  (/lib/modules/7.4.0-rc4-sm6150/updates/wlanpdr.ko, listed in /etc/modules); a real ath10k fix will want PDR anyway.
   => The difference is on the MODEM side, not in anything the AP drives: same wlanmdsp.mbn, but the modem image/config, EFS, or the services the modem talks
   to differ between MIUI and pmOS. Next: compare the QMI/QRTR service list and the modem's tftp/rmtfs file requests under MIUI vs pmOS, and the modem firmware
   files actually loaded (MIUI loads them from /vendor/firmware_mnt, pmOS from /lib/firmware/postmarketos: compare checksums of modem.* and the mcfg/mbn set).
