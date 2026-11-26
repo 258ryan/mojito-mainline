@@ -23,6 +23,20 @@ an address via NetworkManager; LTE stays connected; Phosh 0.59 (greetd/phrog) ru
 - **Not yet reproducible from a clean build:** there is no mainline device package; slot B is still assembled by hand (kernel package +
   `mk-bootimg-v2.sh` + packages/blobs/config copied over SSH, see "REINSTALLED" below).
 
+**Bluetooth WORKS too (2026-11-27):** the chip is a **WCN3950**, so the node must be `qcom,wcn3950-bt` (7.4 has it; loads
+`qca/cmbtfw12.tlv` + `qca/cmnv12.bin`), on UART7 with the PMU supplies and `swctrl-gpios = <&tlmm 102>`. Log: `QCA SOC Version 0x40070120`,
+`QCA setup on UART is completed`. It then stays an *unconfigured controller* (no BD address) until **`bootmac`** is installed (sets
+BT and Wi-Fi addresses, also fixes the random Wi-Fi MAC). Scan finds devices. Now in the repo DTS together with Wi-Fi `okay` and
+**L10a no longer always-on** (the working test DTB) - kernel package **pkgrel=25, NOT BUILT YET** (patch 0001 regenerated).
+- `mojito-wifi` bug fixed: the hexagonrpcd log is empty for the first seconds, which the first version took as "quiet" and loaded
+  ath10k at 12 s (119 x5, then HTT -110). It now waits for >= 100 lines first. `rmmod ath10k_snoc; modprobe ath10k_snoc` recovers.
+- **USB networking freezes** the phone on large transfers (~140 MB tar earlier; the user knows it as a recurring bug). Keep
+  transfers small/one at a time; recovery: Power + Vol-down to fastboot.
+- The `qcom-pm8150b-charger ... battery over-voltage` message floods dmesg (several per second) and pushes other messages out of
+  the ring buffer: check logs right after an event, or fix the message.
+- Firmware for a clean build: private repo `258ryan/mojito-firmware` (package `firmware-xiaomi-mojito-mainline`, provides/replaces
+  `firmware-xiaomi-mojito`; vendor files, ath10k board, BT tlv/nv, hexagonrpcd sensor tree). EFS images are NOT in it (IMEI).
+
 ## 2026-11-27: Wi-Fi cause found on stock (the analysis that led to the fix above)
 
 Controlled tests on stock MIUI (same phone, recorder kernel, one change per boot) showed the WLAN capability request depends on the **ADSP sensor PD file server**:

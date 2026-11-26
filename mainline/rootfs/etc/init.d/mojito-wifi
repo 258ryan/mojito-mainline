@@ -21,11 +21,13 @@ start_pre() {
 }
 
 start_post() {
+	# The log stays empty for a few seconds before the sensor PD starts asking for files, so wait for
+	# traffic to start (>= 100 lines; a full pass is ~1600) and only then for 3 s without new lines.
 	( last=-1; quiet=0
-	  for i in $(seq 1 240); do
+	  for i in $(seq 1 360); do
 		n=$(wc -l < /var/log/hexagonrpcd-sensorspd.log)
 		[ "$n" = "$last" ] && quiet=$((quiet+1)) || quiet=0; last=$n
-		[ $quiet -ge 6 ] && break; sleep 0.5
+		[ "$n" -ge 100 ] && [ $quiet -ge 6 ] && break; sleep 0.5
 	  done
 	  modprobe ath10k_snoc ) >/dev/null 2>&1 &
 }
