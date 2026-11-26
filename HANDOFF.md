@@ -38,6 +38,16 @@ PMU) - parts of it were tested separately; (3) keep reading the firmware (recipe
   board.bin}` (firmware-5 from linux-firmware-ath10k, board.bin = stock bdwlan.bin).
 - The clock is only right after NTP over LTE (`ntpd -q -n -p pool.ntp.org`); no time sync at boot yet.
 
+**REINSTALLED 2026-11-27 (after the stock-MIUI reference session):** fresh `pmbootstrap install` (console UI, password unchanged). Slot A = downstream from that install
+(boot/vendor_boot/dtbo via `pmbootstrap flasher`), slot B = r21 kernel + repo DTS DTB + the new install's vendor_ramdisk (`mk-bootimg-v2.sh`, new UUIDs
+boot 03430a6c-..., root e11d21b7-...), `dtbo_b` erased, vbmeta_a/_b = stock vbmeta flashed with `--disable-verity --disable-verification` (the device package has no
+vbmeta partition for `flasher flash_vbmeta`). On the rootfs: r21 modules, modem userspace (offline from cached apks; ModemManager shows "failed" at boot but is
+started by D-Bus activation and LTE autoconnects), the 53 stock firmware files the package lacks in /lib/firmware/postmarketos (incl. **ipa_fws**: without it IPA
+fails with -2 and there is no rmnet_ipa0), restored rmtfs config/EFS files, NM `mobile`, msm.conf, blacklists for ath10k_snoc and hci_uart, and the Android files
+`/lib/firmware/ath10k/WCN3990/hw1.0/android/{bdf_gl.bin,regdb.bin}` + `/lib/firmware/qca/cmbtfw12.tlv, cmnv12.bin`. Phosh/gmobile are NOT reinstalled.
+**Lesson:** never `tar -C / -x` an archive made with `tar -C dir .` - its `./`, `./etc` ... entries re-own `/` and `/etc` to the PC uid and sudo then refuses
+(`/etc must be owned by root`); there is no doas/root password, so only a rootfs reflash fixes it. Pack file lists only (`find . -type f`) and extract with `-o`.
+
 **Package state:** `mainline/linux-postmarketos-qcom-sm6150` is at **pkgrel=24, NOT BUILT YET** (patch 0001 was regenerated from the DTS and its checksum
 updated; includes patch 0014, the SMMU fix audio streams need). Build it: `pmbootstrap build linux-postmarketos-qcom-sm6150` (~3 min with ccache; config/header
 changes ~13 min), then `tools/install-modules.sh`, `mk-bootimg-v2.sh`, flash `boot_b` (and `fastboot set_active b` afterwards). gmobile: `pmbootstrap build --arch aarch64 gmobile`.
