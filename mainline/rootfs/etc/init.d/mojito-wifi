@@ -1,13 +1,22 @@
 #!/sbin/openrc-run
-# Redmi Note 10 (mojito/sunny) Wi-Fi: the modem's WLAN firmware rejects the capability request (error 119)
-# until the ADSP sensor PD has been served its files by hexagonrpcd, so load ath10k_snoc only after the
-# sensor PD's file traffic has settled (~40 s). ath10k_snoc stays blacklisted for udev autoload.
-name="mojito Wi-Fi (sensorspd + ath10k)"
+# Redmi Note 10 (mojito/sunny) Wi-Fi bring-up.
+#
+# The modem's WLAN firmware rejects the capability request (error 119) until the ADSP sensor PD has been
+# served its files by hexagonrpcd. Only the secure node works for that here: with /dev/fastrpc-adsp
+# (qcom,non-secure-domain) the sensor PD gets the same file traffic but the capability still fails, and
+# the stock hexagonrpcd-adsp-sensorspd service (fastrpc user) cannot open the 0600 root-owned secure node.
+# So this service runs hexagonrpcd as root on /dev/fastrpc-adsp-secure, waits until the sensor PD's file
+# traffic has started and settled (~40 s), then loads ath10k_snoc once. If the capability is still
+# rejected, ath10k_snoc is unloaded again instead of leaving the firmware in an endless crash/restart loop.
+# ath10k_snoc and hci_uart are blacklisted for udev autoload (/etc/modprobe.d/ath10k-mojito.conf).
+
+name="mojito Wi-Fi (sensor PD + ath10k)"
 supervisor=supervise-daemon
 command=/usr/bin/hexagonrpcd
 command_args="-f /dev/fastrpc-adsp-secure -d adsp -s -R /usr/share/qcom/sm6150/Xiaomi/mojito"
-output_log=/var/log/hexagonrpcd-sensorspd.log
-error_log=/var/log/hexagonrpcd-sensorspd.log
+LOG=/run/hexagonrpcd/sensorspd.log
+output_log=$LOG
+error_log=$LOG
 
 depend() {
 	need rmtfs
@@ -15,19 +24,44 @@ depend() {
 }
 
 start_pre() {
-	: > /var/log/hexagonrpcd-sensorspd.log
-	for i in $(seq 1 60); do qrtr-lookup 2>/dev/null | awk '$1==69' | grep -q . && return 0; sleep 1; done
-	ewarn "WLAN firmware service (69) not seen"
+	checkpath -d -m 0755 /run/hexagonrpcd
+	: > $LOG
+	# The sensor PD must be attached AFTER the modem's WLAN firmware service (QMI 69) is registered:
+	# every run that started hexagonrpcd earlier got 119 for the rest of the boot.
+	for i in $(seq 1 120); do
+		qrtr-lookup 2>/dev/null | awk '$1==69' | grep -q . && return 0
+		sleep 0.5
+	done
+	ewarn "WLAN firmware service (69) not seen after 60 s"
 }
 
 start_post() {
-	# The log stays empty for a few seconds before the sensor PD starts asking for files, so wait for
-	# traffic to start (>= 100 lines; a full pass is ~1600) and only then for 3 s without new lines.
-	( last=-1; quiet=0
+	( # wait for the sensor PD: traffic must start (>= 100 lines; a full pass is ~1600), then 3 s quiet
+	  last=-1; quiet=0
 	  for i in $(seq 1 360); do
-		n=$(wc -l < /var/log/hexagonrpcd-sensorspd.log)
+		n=$(wc -l < $LOG 2>/dev/null || echo 0)
 		[ "$n" = "$last" ] && quiet=$((quiet+1)) || quiet=0; last=$n
-		[ "$n" -ge 100 ] && [ $quiet -ge 6 ] && break; sleep 0.5
+		[ "$n" -ge 100 ] && [ $quiet -ge 6 ] && break
+		sleep 0.5
 	  done
-	  modprobe ath10k_snoc ) >/dev/null 2>&1 &
+	  lsmod | grep -q '^ath10k_snoc ' && exit 0
+	  before=$(dmesg | grep -c 'capability req rejected')
+	  logger -t mojito-wifi "sensor PD served ($n lines), loading ath10k_snoc"
+	  modprobe ath10k_snoc
+	  for i in $(seq 1 60); do
+		if [ -e /sys/class/net/wlan0 ]; then
+			# Bluetooth (same WCN3950) only now: an hci_uart probe before the modem has brought the
+			# chip up (~5 s into boot) times out, power-cycles it and leaves it dead for the whole
+			# boot (Wi-Fi then gets 119 too). hci_uart is blacklisted for udev autoload.
+			logger -t mojito-wifi "wlan0 up, loading hci_uart"
+			modprobe hci_uart
+			exit 0
+		fi
+		if [ "$(dmesg | grep -c 'capability req rejected')" -gt "$before" ]; then
+			logger -t mojito-wifi "capability rejected (119): unloading ath10k_snoc"
+			rmmod ath10k_snoc
+			exit 1
+		fi
+		sleep 0.5
+	  done ) >/dev/null 2>&1 &
 }

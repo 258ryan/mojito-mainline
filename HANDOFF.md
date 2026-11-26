@@ -23,6 +23,23 @@ an address via NetworkManager; LTE stays connected; Phosh 0.59 (greetd/phrog) ru
 - **Not yet reproducible from a clean build:** there is no mainline device package; slot B is still assembled by hand (kernel package +
   `mk-bootimg-v2.sh` + packages/blobs/config copied over SSH, see "REINSTALLED" below).
 
+**Wi-Fi + Bluetooth bring-up, final (2026-11-27, verified on a cold boot: wlan0 connected ~50 s, BT powered ~51 s, no 119):**
+`mainline/rootfs/etc/init.d/mojito-wifi` + `modprobe.d/ath10k-mojito.conf` (blacklists `ath10k_snoc` AND `hci_uart`). Order matters:
+1. hexagonrpcd as **root on `/dev/fastrpc-adsp-secure`**, started after the modem's WLFW service (QMI 69) is registered.
+2. `ath10k_snoc` once the sensor PD's file traffic has started and settled; if 119 anyway, unload it (no endless crash loop).
+3. `hci_uart` only after `wlan0` is up.
+Lessons (each cost a freeze/boot):
+- **An early `hci_uart` probe kills the chip for the whole boot.** At ~5 s the modem has not brought the WCN3950 up yet, BT times out
+  (`command 0xfc00 tx timeout`), retries with power cycles, and afterwards Wi-Fi gets 119 and BT times out for the rest of the boot. This
+  was also the old "chip is silent" BT A/B result. Wi-Fi and BT fail or work together: check BT when Wi-Fi gets 119.
+- **`/dev/fastrpc-adsp` (`qcom,non-secure-domain`) does not work for this:** same sensor-PD file traffic, but 119 every time. The stock
+  `hexagonrpcd-adsp-sensorspd` service (user fastrpc) cannot open the 0600 secure node, so it is not used. The DT change was reverted.
+- A `modprobe ath10k_snoc` that never returns holds the module lock: `lsmod`, udev and reads of `/proc/<pid>` hang, the phone slowly locks up.
+- The freezes on the Phosh boots happened even with Wi-Fi not loaded yet (last line: session start at ~31 s, USB link drops); without
+  greetd the same bring-up never froze. Suspects: gmobile r1 (local cutout build, installed just before the freezes started) and
+  plymouth staying attached (quitting it once un-froze the screen). **greetd is currently disabled on the phone** (`rc-update add greetd default` to undo).
+- busybox `grep` has no `--line-buffered`; a `dmesg -w | grep ...` capture silently records nothing. Stream raw `dmesg -w` instead.
+
 **Bluetooth WORKS too (2026-11-27):** the chip is a **WCN3950**, so the node must be `qcom,wcn3950-bt` (7.4 has it; loads
 `qca/cmbtfw12.tlv` + `qca/cmnv12.bin`), on UART7 with the PMU supplies and `swctrl-gpios = <&tlmm 102>`. Log: `QCA SOC Version 0x40070120`,
 `QCA setup on UART is completed`. It then stays an *unconfigured controller* (no BD address) until **`bootmac`** is installed (sets
