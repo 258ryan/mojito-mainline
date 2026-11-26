@@ -1,12 +1,13 @@
 From: postmarketOS mojito port
-Subject: [PATCH] wifi: ath10k: qmi: EXPERIMENT, download regdb + board data before the capability request
+Subject: [PATCH] wifi: ath10k: qmi: EXPERIMENT, board data / regdb / cal report before the capability request
 
-Diagnostic only. Module parameter pre_bdf (0 stock, 1 regdb.bin + bdf_gl.bin, 2 bdf only), like the
-downstream cnss-daemon on stock MIUI, which sends regdb.bin then bdf_gl.bin right after MSA ready. NOT for upstream.
+Diagnostic only. Module parameter pre_bdf: 0 stock, 1 regdb.bin + bdf_gl.bin, 2 bdf only, 3 cal report only, all sent
+after MSA ready and before the capability request (the order the downstream cnss-daemon appears to use). Result on
+mojito: the firmware refuses all of them before cap (BDF: QMI error 90; cal report: -22). NOT for upstream.
 ---
 diff -ru a/drivers/net/wireless/ath/ath10k/qmi.c b/drivers/net/wireless/ath/ath10k/qmi.c
 --- a/drivers/net/wireless/ath/ath10k/qmi.c	2026-11-26 23:34:59.886880427 +0500
-+++ b/drivers/net/wireless/ath/ath10k/qmi.c	2026-11-26 23:34:59.889822854 +0500
++++ b/drivers/net/wireless/ath/ath10k/qmi.c	2026-11-26 23:55:58.496038093 +0500
 @@ -14,6 +14,7 @@
  #include <linux/module.h>
  #include <linux/net.h>
@@ -27,16 +28,17 @@ diff -ru a/drivers/net/wireless/ath/ath10k/qmi.c b/drivers/net/wireless/ath/ath1
 + */
 +static int pre_bdf;
 +module_param(pre_bdf, int, 0644);
-+MODULE_PARM_DESC(pre_bdf, "0: stock order, 1: regdb+bdf before cap, 2: bdf only before cap");
++MODULE_PARM_DESC(pre_bdf, "0: stock order, 1: regdb+bdf before cap, 2: bdf only before cap, 3: cal report before cap");
  #define SMEM_IMAGE_VERSION_ENTRY_SIZE	128
  #define SMEM_IMAGE_VERSION_NAME_SIZE	75
  
-@@ -235,8 +245,18 @@
+@@ -235,8 +245,19 @@
  	return ret;
  }
  
 +static int ath10k_qmi_blob_dnld_send_sync(struct ath10k_qmi *qmi, const u8 *data,
 +					 unsigned int len, int bdf_type);
++static int ath10k_qmi_send_cal_report_req(struct ath10k_qmi *qmi);
 +
  static int ath10k_qmi_bdf_dnld_send_sync(struct ath10k_qmi *qmi)
  {
@@ -50,7 +52,7 @@ diff -ru a/drivers/net/wireless/ath/ath10k/qmi.c b/drivers/net/wireless/ath/ath1
  	struct wlfw_bdf_download_resp_msg_v01 resp = {};
  	struct wlfw_bdf_download_req_msg_v01 *req;
  	struct ath10k *ar = qmi->ar;
-@@ -249,15 +269,19 @@
+@@ -249,15 +270,19 @@
  	if (!req)
  		return -ENOMEM;
  
@@ -73,7 +75,7 @@ diff -ru a/drivers/net/wireless/ath/ath10k/qmi.c b/drivers/net/wireless/ath/ath1
  		req->seg_id_valid = 1;
  		req->data_valid = 1;
  		req->end_valid = 1;
-@@ -311,7 +335,7 @@
+@@ -311,7 +336,7 @@
  		req->seg_id++;
  	}
  
@@ -82,7 +84,7 @@ diff -ru a/drivers/net/wireless/ath/ath10k/qmi.c b/drivers/net/wireless/ath/ath1
  
  	kfree(req);
  	return 0;
-@@ -845,10 +869,41 @@
+@@ -845,10 +870,47 @@
  	if (ret)
  		return;
  
@@ -98,6 +100,11 @@ diff -ru a/drivers/net/wireless/ath/ath10k/qmi.c b/drivers/net/wireless/ath/ath1
 +
 +		if (!wait_for_completion_timeout(&qmi->msa_ready_comp, msecs_to_jiffies(2000)))
 +			ath10k_warn(ar, "pre_bdf: no MSA ready indication within 2 s\n");
++		if (pre_bdf == 3) {
++			ret = ath10k_qmi_send_cal_report_req(qmi);
++			ath10k_info(ar, "pre_bdf: cal report before cap ret %d\n", ret);
++			goto send_cap;
++		}
 +		if (pre_bdf == 1) {
 +			ret = request_firmware(&fw, "ath10k/WCN3990/hw1.0/android/regdb.bin", ar->dev);
 +			if (!ret) {
@@ -118,13 +125,14 @@ diff -ru a/drivers/net/wireless/ath/ath10k/qmi.c b/drivers/net/wireless/ath/ath1
 +		} else {
 +			ath10k_warn(ar, "pre_bdf: no bdf_gl.bin: %d\n", ret);
 +		}
++send_cap:
 +		ath10k_info(ar, "pre_bdf: sending the capability request now\n");
 +	}
 +
  	ret = ath10k_qmi_cap_send_sync_msg(qmi);
  	if (ret)
  		goto err_setup_msa;
-@@ -919,6 +974,11 @@
+@@ -919,6 +981,11 @@
  {
  	int ret;
  
@@ -136,7 +144,7 @@ diff -ru a/drivers/net/wireless/ath/ath10k/qmi.c b/drivers/net/wireless/ath/ath1
  	ret = ath10k_qmi_fetch_board_file(qmi);
  	if (ret)
  		goto out;
-@@ -958,6 +1018,7 @@
+@@ -958,6 +1025,7 @@
  {
  	struct ath10k_qmi *qmi = container_of(qmi_hdl, struct ath10k_qmi, qmi_hdl);
  
@@ -144,7 +152,7 @@ diff -ru a/drivers/net/wireless/ath/ath10k/qmi.c b/drivers/net/wireless/ath/ath1
  	ath10k_qmi_driver_event_post(qmi, ATH10K_QMI_EVENT_MSA_READY_IND, NULL);
  }
  
-@@ -1111,6 +1172,7 @@
+@@ -1111,6 +1179,7 @@
  	INIT_LIST_HEAD(&qmi->event_list);
  	spin_lock_init(&qmi->event_lock);
  	INIT_WORK(&qmi->event_work, ath10k_qmi_driver_event_work);
@@ -154,7 +162,7 @@ diff -ru a/drivers/net/wireless/ath/ath10k/qmi.c b/drivers/net/wireless/ath/ath1
  			     WLFW_SERVICE_VERS_V01, 0);
 diff -ru a/drivers/net/wireless/ath/ath10k/qmi.h b/drivers/net/wireless/ath/ath10k/qmi.h
 --- a/drivers/net/wireless/ath/ath10k/qmi.h	2026-11-26 23:34:59.887067144 +0500
-+++ b/drivers/net/wireless/ath/ath10k/qmi.h	2026-11-26 23:34:59.889881449 +0500
++++ b/drivers/net/wireless/ath/ath10k/qmi.h	2026-11-26 23:55:58.496127437 +0500
 @@ -108,6 +108,8 @@
  	struct ath10k_qmi_cal_data cal_data[MAX_NUM_CAL_V01];
  	bool msa_fixed_perm;
