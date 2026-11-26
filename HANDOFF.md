@@ -5,6 +5,9 @@ State as of 2026-11-27 (Wi-Fi work 2026-11-26/27).
 
 ## START HERE (2026-11-26, end of session): where things stand
 
+> **2026-11-27, read first:** a second Wi-Fi session ("Wi-Fi: second session" below) exhausted the mainline ideas. The user then chose to restore
+> stock Android. Before that wipe the pmOS files and boot partitions were backed up on the PC (not in this repo).
+
 **Working on slot B (mainline 7.4-rc4):** boot, UFS, USB networking/SSH, display + DCS brightness, touch, Adreno 612, Phosh on boot with
 the correct corner/cutout layout (gmobile panel data, `mainline/gmobile/`), **battery gauge** (`qcom_qg_lite`, patch 0010), **charging**
 (SMB5, patch 0008; wall ~1 A, PC port 500 mA, correct Charging/Full status), **ADSP**, **modem**: LTE data (~22 Mbit/s, IPv4+IPv6), SMS
@@ -771,6 +774,32 @@ Later tests (2026-11-26 evening):
   - **Next:** (1) on the phone, sample TLMM gpio102 (SW_CTRL) rapidly across the capability request; a change or none is a clue, not proof;
     (2) trace the adrastea_clk apply path and the WSI test routine ("ccpm_rfactrl_wsi_test").
 - **Still unknown:** what the modem's WLAN power-up waits ~200 ms for. Needs the modem's own log or a different angle (e.g. memory capture before `qcom_pas_shutdown`, risky).
+### Wi-Fi: second session (2026-11-27) - every test below still ends in `capability req rejected: 119`
+
+Tools and device-tree fragments: `mainline/wip/wlan-re/`.
+
+**New facts (measured on hardware):**
+- During the capability request the **modem itself** enables L1c, L2c, L10c (+5 ms after MSA ready) and L9a (+16 ms); SW_CTRL (gpio102) rises
+  +17..27 ms; L1c/L2c/L9a go off again at the rejection (+200 ms on the first attempt after boot, ~400-425 ms later). The chip's PMU side reacts.
+- No file request reaches `tqftpserv`/`rmtfs` between driver load and the first rejection (both stayed asleep): not a missing board file there.
+- mainline ath10k powers regulators only in `hif_power_up` (after FW ready), so the earlier "Android power order" test (A) never did that.
+  L10a being on does not by itself hold SW_CTRL high (it read low with L10a on).
+
+**Tested, no change:** L10a not always-on with the PMU node; radio powered before the first WLFW request, plus 100/500 ms waits (`early-power.patch`);
+**kernel 7.2.10** with our patches (same version as the violet port); violet-style direct supplies and always-on/LPM rails (mojito stock voltage
+ranges); modem stop/start loop like violet (4 restarts, mobile data driver blocked; the modem survives restarts without IPA); **clean-room** run:
+Wi-Fi node like sm7125-mainline `miatoll`, `msa-fixed-perm`, no gpio98 pinctrl, no PMU node, stock driver, `rmtfs` pmOS default, no `wlanpdr`.
+Slot A (downstream) Bluetooth power-on through `bt_power`: no reply, CTS never asserted (inconclusive: stock starts the chip through Wi-Fi first).
+Do not read `/sys/kernel/debug/gpio` on slot A from that probe: the phone reset (gone after removing the read).
+
+**Public reports of the same error, no published software fix found:** qualcomm-linux/qcom-deb-images#667 (RB1, WCN3950, intermittent),
+arduino/arduino-deb-images#23 (UNO Q, every boot, BT silent too). On an Arduino forum thread a board replacement fixed it. This phone's radios work
+under stock MIUI, so the hardware is fine.
+
+**Never captured on stock** (do it before wiping Android again): QMI message contents including the successful capability exchange, the QRTR service
+list from boot, the modem's file requests from boot, logcat from the first second. Stock kernel 4.14.190 has no kprobes, syscall tracing or IPC logging
+and forces module signatures, so the plan is a rebuilt kernel (Xiaomi `mojito-r-oss`, stock config) with `qrtrcap/` added. Not yet built or proven.
+
 - sm7125-mainline (Redmi Note 9 Pro, same PMICs, same `wlan_mem` 0x93900000, Wi-Fi works, unpatched ath10k): 2 MB MSA +
   `qcom,msa-fixed-perm` + ch1 = L11c. With that config here: boots fine, MSA permission errors gone, still 119. The repo DTS now uses it.
 - Stock node also has `qcom,smmu-s1-bypass` and iova ranges (matters for data path later, not for the handshake).

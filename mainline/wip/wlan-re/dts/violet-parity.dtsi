@@ -1,0 +1,56 @@
+/* Append to sm6150-xiaomi-mojito.dts to rebuild this test tree (7.2.10 also needs <dt-bindings/firmware/qcom,scm.h> before talos.dtsi). */
+/* TEST violet-parity: Wi-Fi power as in VipinVIP/violet-sm6150-mainline; voltages stay at mojito stock ranges */
+/ {
+	/delete-node/ wcn3990-pmu;
+};
+
+&{/soc@0/wifi@18800000} {
+	vdd-0.8-cx-mx-supply = <&vreg_l9a>;
+	vdd-1.8-xo-supply = <&vreg_l1c>;
+	vdd-1.3-rfa-supply = <&vreg_l2c>;
+	vdd-3.3-ch0-supply = <&vreg_l10c>;
+	/delete-property/ vdd-3.3-ch1-supply;
+	status = "okay";
+};
+
+&{/soc@0/rsc@18200000/regulators-0/ldo16} {
+	regulator-always-on;
+	regulator-initial-mode = <3>;
+};
+&{/soc@0/rsc@18200000/regulators-0/ldo17} {
+	regulator-always-on;
+	regulator-initial-mode = <3>;
+};
+&{/soc@0/rsc@18200000/regulators-0/ldo18} {
+	regulator-always-on;
+	regulator-initial-mode = <3>;
+};
+&{/soc@0/rsc@18200000/regulators-0/ldo19} {
+	regulator-always-on;
+	regulator-initial-mode = <3>;
+};
+&{/soc@0/rsc@18200000/regulators-0/ldo9} {
+	regulator-always-on;
+	regulator-initial-mode = <1>;
+	regulator-min-microvolt = <640000>;
+};
+&{/soc@0/rsc@18200000/regulators-1/ldo1} {
+	regulator-always-on;
+	regulator-initial-mode = <1>;
+};
+&{/soc@0/rsc@18200000/regulators-1/ldo10} {
+	regulator-always-on;
+	regulator-initial-mode = <1>;
+};
+&{/soc@0/rsc@18200000/regulators-1/ldo2} {
+	regulator-always-on;
+	regulator-initial-mode = <1>;
+};
+&{/soc@0/rsc@18200000/regulators-1/ldo7} {
+	regulator-always-on;
+	regulator-initial-mode = <3>;
+};
+&{/soc@0/rsc@18200000/regulators-1/ldo9} {
+	regulator-always-on;
+	regulator-initial-mode = <3>;
+};

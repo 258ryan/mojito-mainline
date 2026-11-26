@@ -1,0 +1,9 @@
+/* Append to sm6150-xiaomi-mojito.dts to rebuild this test tree. */
+/* TEST: L10a not always-on (the PMU's vddio switches it), Wi-Fi enabled */
+&vreg_l10a {
+	/delete-property/ regulator-always-on;
+};
+
+&{/soc@0/wifi@18800000} {
+	status = "okay";
+};

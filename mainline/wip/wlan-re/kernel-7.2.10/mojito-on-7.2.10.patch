@@ -1,0 +1,3562 @@
+diff --git a/arch/arm64/boot/dts/qcom/Makefile b/arch/arm64/boot/dts/qcom/Makefile
+index 6f33c4e2f..ba46cecd9 100644
+--- a/arch/arm64/boot/dts/qcom/Makefile
++++ b/arch/arm64/boot/dts/qcom/Makefile
+@@ -340,6 +340,7 @@ dtb-$(CONFIG_ARCH_QCOM)	+= sm6115-fxtec-pro1x.dtb
+ dtb-$(CONFIG_ARCH_QCOM)	+= sm6115p-lenovo-j606f.dtb
+ dtb-$(CONFIG_ARCH_QCOM)	+= sm6125-sony-xperia-seine-pdx201.dtb
+ dtb-$(CONFIG_ARCH_QCOM)	+= sm6125-xiaomi-ginkgo.dtb
++dtb-$(CONFIG_ARCH_QCOM)	+= sm6150-xiaomi-mojito.dtb
+ dtb-$(CONFIG_ARCH_QCOM)	+= sm6125-xiaomi-laurel-sprout.dtb
+ dtb-$(CONFIG_ARCH_QCOM)	+= sm6125-xiaomi-willow.dtb
+ dtb-$(CONFIG_ARCH_QCOM)	+= sm6350-sony-xperia-lena-pdx213.dtb
+diff --git a/arch/arm64/boot/dts/qcom/sm6150-xiaomi-mojito.dts b/arch/arm64/boot/dts/qcom/sm6150-xiaomi-mojito.dts
+new file mode 100644
+index 000000000..00a421c35
+--- /dev/null
++++ b/arch/arm64/boot/dts/qcom/sm6150-xiaomi-mojito.dts
+@@ -0,0 +1,1132 @@
++// SPDX-License-Identifier: BSD-3-Clause
++/*
++ * Xiaomi Redmi Note 10 (mojito / sunny), SM6150 "Talos".
++ *
++ * Phase 1: boot to a shell. UFS root, USB peripheral (SSH over USB network),
++ * buttons, and the bootloader's splash buffer as a simple-framebuffer.
++ * Display (DSI panel), GPU, remoteprocs, touch and charging come later.
++ *
++ * Regulators, supplies and carveouts are taken from the stock downstream
++ * device tree of this phone (MIUI V14.0.9.0.SKGMIXM).
++ */
++
++/dts-v1/;
++
++#include <dt-bindings/gpio/gpio.h>
++#include <dt-bindings/iio/qcom,spmi-vadc.h>
++#include <dt-bindings/input/linux-event-codes.h>
++#include <dt-bindings/leds/common.h>
++#include <dt-bindings/pinctrl/qcom,pmic-gpio.h>
++#include <dt-bindings/regulator/qcom,rpmh-regulator.h>
++#include <dt-bindings/soc/qcom,apr.h>
++#include <dt-bindings/sound/qcom,q6afe.h>
++#include <dt-bindings/sound/qcom,q6asm.h>
++#include "talos.dtsi"
++#include "pm6150.dtsi"
++#include "pm6150l.dtsi"
++
++/ {
++	model = "Xiaomi Redmi Note 10";
++	compatible = "xiaomi,mojito", "qcom,sm6150";
++	chassis-type = "handset";
++
++	/* Matched by the Xiaomi bootloader (same values as the stock SM6150 DTB). */
++	qcom,msm-id = <0x163 0x0>;
++	qcom,board-id = <0 0>;
++
++	aliases {
++		serial0 = &uart0;
++	};
++
++	chosen {
++		#address-cells = <2>;
++		#size-cells = <2>;
++		ranges;
++
++		/* The bootloader leaves the panel scanning out of cont_splash. */
++		framebuffer0: framebuffer@9c000000 {
++			compatible = "simple-framebuffer";
++			reg = <0x0 0x9c000000 0x0 (1080 * 2400 * 4)>;
++			memory-region = <&cont_splash_mem>;
++			/*
++			 * Deliberately NO power-domains and NO clocks here, although holding MDSS_CORE_GDSC and the display
++			 * clocks keeps the splash alive until msm loads. The bootloader leaves its splash pipeline running and
++			 * the DPU's CTL stuck in a hardware reset (it never accepts a frame: "hw recovery is not complete for
++			 * ctl:1", blue screen); only a power cycle of the display core clears that, and holding the domain on
++			 * means it is never cycled. Without the hold, genpd collapses MDSS_CORE_GDSC once nothing uses it
++			 * and msm powers it up fresh, which works. Cost: a few seconds of green/black between the splash and
++			 * the first real frame. An mdss "resets" line (DISP_CC_MDSS_CORE_BCR) hangs the phone at probe.
++			 */
++			width = <1080>;
++			height = <2400>;
++			stride = <(1080 * 4)>;
++			format = "a8r8g8b8";
++		};
++	};
++
++	clocks {
++		/* Same SoC crystals as the QCS615 Ride (stock DT: chip_sleep_clk 32 kHz). */
++		sleep_clk: sleep-clk {
++			compatible = "fixed-clock";
++			clock-frequency = <32000>;
++			#clock-cells = <0>;
++		};
++
++		xo_board_clk: xo-board-clk {
++			compatible = "fixed-clock";
++			clock-frequency = <38400000>;
++			#clock-cells = <0>;
++		};
++	};
++
++	gpio-keys {
++		compatible = "gpio-keys";
++		pinctrl-0 = <&vol_up_n>;
++		pinctrl-names = "default";
++
++		key-volume-up {
++			label = "Volume Up";
++			gpios = <&pm6150_gpios 2 GPIO_ACTIVE_LOW>;
++			linux,code = <KEY_VOLUMEUP>;
++			debounce-interval = <15>;
++			linux,can-disable;
++			wakeup-source;
++		};
++	};
++
++	reserved-memory {
++		/* Carveouts present in the stock DT but not (yet) in talos.dtsi. */
++		hyp_mem: hyp@85700000 {
++			reg = <0x0 0x85700000 0x0 0x600000>;
++			no-map;
++		};
++
++		/* XBL/AOP firmware; aop-cmd-db@85f20000 (talos.dtsi) sits right after it. */
++		xbl_aop_mem: xbl-aop@85e00000 {
++			reg = <0x0 0x85e00000 0x0 0x120000>;
++			no-map;
++		};
++
++		ipa_fw_mem: ipa-fw@97b00000 {
++			reg = <0x0 0x97b00000 0x0 0x10000>;
++			no-map;
++		};
++
++		ipa_gsi_mem: ipa-gsi@97b10000 {
++			reg = <0x0 0x97b10000 0x0 0x5000>;
++			no-map;
++		};
++
++		sec_apps_mem: sec-apps@85fff000 {
++			reg = <0x0 0x85fff000 0x0 0x1000>;
++			no-map;
++		};
++
++		removed_mem: removed@86200000 {
++			reg = <0x0 0x86200000 0x0 0x4900000>;
++			no-map;
++		};
++
++		camera_mem: camera@8ab00000 {
++			reg = <0x0 0x8ab00000 0x0 0x500000>;
++			no-map;
++		};
++
++		mpss_mem: mpss@8b000000 {
++			reg = <0x0 0x8b000000 0x0 0x8400000>;
++			no-map;
++		};
++
++		/* the whole stock wlan_msa_region (2 MB); ath10k assigns it to the modem and WLAN VMIDs itself, like stock icnss and the violet port */
++		wlan_msa_mem: wlan-msa@93900000 {
++			reg = <0x0 0x93900000 0x0 0x200000>;
++			no-map;
++		};
++
++		/*
++		 * rmtfs shared memory (modem file access through the rmtfs daemon). The vendor tree
++		 * allocates it dynamically (qcom,sharedmem-uio reg = <0 0x280000>, guard memory), so this
++		 * is a fixed, otherwise unused DRAM range above cdsp-sec (ends 0xa1600000), 0x280000 plus a
++		 * guard page on each side. Same placement as the Redmi Note 7 Pro port.
++		 */
++		rmtfs_mem: rmtfs@a1dff000 {
++			compatible = "qcom,rmtfs-mem";
++			reg = <0x0 0xa1dff000 0x0 0x282000>;
++			no-map;
++			qcom,client-id = <1>;
++			qcom,use-guard-pages;
++			qcom,vmid = <QCOM_SCM_VMID_MSS_MSA>;
++		};
++
++		cont_splash_mem: cont-splash@9c000000 {
++			reg = <0x0 0x9c000000 0x0 0xf00000>;
++			no-map;
++		};
++
++		dfps_data_mem: dfps-data@9cf00000 {
++			reg = <0x0 0x9cf00000 0x0 0x100000>;
++			no-map;
++		};
++
++		ramoops@9d800000 {
++			compatible = "ramoops";
++			reg = <0x0 0x9d800000 0x0 0x400000>;
++			/* same layout as the stock kernel, so either can read the other's log */
++			record-size = <0x80000>;
++			console-size = <0x100000>;
++			pmsg-size = <0x200000>;
++		};
++
++		qseecom_mem: qseecom@9e400000 {
++			reg = <0x0 0x9e400000 0x0 0x1400000>;
++			no-map;
++		};
++
++		cdsp_sec_mem: cdsp-sec@9f800000 {
++			reg = <0x0 0x9f800000 0x0 0x1e00000>;
++			no-map;
++		};
++	};
++};
++
++&apps_rsc {
++	regulators-0 {
++		compatible = "qcom,pm6150-rpmh-regulators";
++		qcom,pmic-id = "a";
++
++		vreg_l1a: ldo1 {
++			regulator-min-microvolt = <1200000>;
++			regulator-max-microvolt = <1252000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++
++		vreg_l2a: ldo2 {
++			regulator-min-microvolt = <1000000>;
++			regulator-max-microvolt = <1050000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++
++		vreg_l3a: ldo3 {
++			regulator-min-microvolt = <1000000>;
++			regulator-max-microvolt = <1060000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++
++		vreg_l4a: ldo4 {
++			regulator-min-microvolt = <875000>;
++			regulator-max-microvolt = <975000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++
++		vreg_l5a: ldo5 {
++			regulator-min-microvolt = <2500000>;
++			regulator-max-microvolt = <2970000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++
++		vreg_l6a: ldo6 {
++			regulator-min-microvolt = <600000>;
++			regulator-max-microvolt = <650000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++
++		vreg_l9a: ldo9 {
++			regulator-min-microvolt = <400000>;
++			regulator-max-microvolt = <728000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++
++		/*
++		 * 1.8 V I/O for the WCN3990 (Wi-Fi/Bluetooth), always on in the stock tree; nothing in
++		 * Linux votes for it, and without it the WLFW host capability request fails (QMI 90).
++		 */
++		vreg_l10a: ldo10 {
++			regulator-min-microvolt = <1800000>;
++			regulator-max-microvolt = <1829000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++			regulator-always-on;
++		};
++
++		vreg_l11a: ldo11 {
++			regulator-min-microvolt = <1800000>;
++			regulator-max-microvolt = <1890000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++
++		vreg_l12a: ldo12 {
++			regulator-min-microvolt = <1800000>;
++			regulator-max-microvolt = <1950000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++
++		vreg_l13a: ldo13 {
++			regulator-min-microvolt = <1800000>;
++			regulator-max-microvolt = <1900000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++
++		vreg_l14a: ldo14 {
++			regulator-min-microvolt = <1800000>;
++			regulator-max-microvolt = <1850000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++
++		vreg_l15a: ldo15 {
++			regulator-min-microvolt = <1800000>;
++			regulator-max-microvolt = <1900000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++
++		vreg_l16a: ldo16 {
++			regulator-min-microvolt = <2430000>;
++			regulator-max-microvolt = <2970000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++
++		vreg_l17a: ldo17 {
++			regulator-min-microvolt = <3000000>;
++			regulator-max-microvolt = <3230000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++
++		vreg_l18a: ldo18 {
++			regulator-min-microvolt = <3000000>;
++			regulator-max-microvolt = <3008000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++
++		vreg_l19a: ldo19 {
++			regulator-min-microvolt = <2700000>;
++			regulator-max-microvolt = <3008000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++	};
++
++	regulators-1 {
++		compatible = "qcom,pm6150l-rpmh-regulators";
++		qcom,pmic-id = "c";
++
++		vreg_s8c: smps8 {
++			regulator-min-microvolt = <1200000>;
++			regulator-max-microvolt = <1400000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++
++		vreg_l1c: ldo1 {
++			regulator-min-microvolt = <1800000>;
++			regulator-max-microvolt = <1900000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++
++		vreg_l2c: ldo2 {
++			regulator-min-microvolt = <1304000>;
++			regulator-max-microvolt = <1304000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++
++		vreg_l3c: ldo3 {
++			regulator-min-microvolt = <1232000>;
++			regulator-max-microvolt = <1260000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++
++		vreg_l4c: ldo4 {
++			regulator-min-microvolt = <1650000>;
++			regulator-max-microvolt = <2950000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++
++		vreg_l5c: ldo5 {
++			regulator-min-microvolt = <1650000>;
++			regulator-max-microvolt = <2950000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++
++		vreg_l6c: ldo6 {
++			regulator-min-microvolt = <1650000>;
++			regulator-max-microvolt = <3100000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++
++		vreg_l7c: ldo7 {
++			regulator-min-microvolt = <3000000>;
++			regulator-max-microvolt = <3312000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++
++		vreg_l8c: ldo8 {
++			regulator-min-microvolt = <1800000>;
++			regulator-max-microvolt = <1900000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++
++		vreg_l9c: ldo9 {
++			regulator-min-microvolt = <2950000>;
++			regulator-max-microvolt = <3312000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++
++		vreg_l10c: ldo10 {
++			regulator-min-microvolt = <3200000>;
++			regulator-max-microvolt = <3312000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++
++		vreg_l11c: ldo11 {
++			regulator-min-microvolt = <2950000>;
++			regulator-max-microvolt = <3312000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++	};
++};
++
++&pm6150_gpios {
++	vol_up_n: vol-up-n-state {
++		pins = "gpio2";
++		function = "normal";
++		power-source = <0>;
++		bias-pull-up;
++		input-enable;
++	};
++};
++
++&pm6150_pwrkey {
++	status = "okay";
++};
++
++&pm6150_resin {
++	linux,code = <KEY_VOLUMEDOWN>;
++	status = "okay";
++};
++
++
++&ufs_mem_hc {
++	vcc-supply = <&vreg_l11c>;
++	vcc-max-microamp = <600000>;
++	vccq2-supply = <&vreg_l12a>;
++	vccq2-max-microamp = <600000>;
++
++	status = "okay";
++};
++
++&ufs_mem_phy {
++	vdda-phy-supply = <&vreg_l4a>;
++	vdda-pll-supply = <&vreg_l11a>;
++
++	status = "okay";
++};
++
++&usb_1_hsphy {
++	vdd-supply = <&vreg_l4a>;
++	vdda-pll-supply = <&vreg_l11a>;
++	vdda-phy-dpdm-supply = <&vreg_l17a>;
++
++	status = "okay";
++};
++
++&usb_qmpphy {
++	vdda-phy-supply = <&vreg_l4a>;
++	vdda-pll-supply = <&vreg_l11a>;
++
++	status = "okay";
++};
++
++&usb_1 {
++	/* No Type-C role switching yet: stay a USB gadget for SSH over USB. */
++	dr_mode = "peripheral";
++
++	status = "okay";
++};
++
++/* Xiaomi's firmware layout differs from the QCS615 Ride's. */
++&rproc_adsp_mem {
++	reg = <0x0 0x95900000 0x0 0x2200000>;
++};
++
++/*
++ * ADSP (audio, sensors). Stock firmware from the phone's modem partition, signed for this device.
++ * It speaks legacy APR, not AudioReach, so talos.dtsi's gpr/q6apm children stay unused (the
++ * firmware never opens "adsp_apps"); APR nodes come with the sound card.
++ */
++&remoteproc_adsp {
++	firmware-name = "postmarketos/adsp.mdt";
++	status = "okay";
++};
++
++/*
++ * Audio services on the ADSP: legacy APR (the firmware offers "apr_audio_svc"), replacing talos.dtsi's
++ * AudioReach gpr node, which this firmware never answers. Layout as in the Redmi Note 7 Pro port, with
++ * the protection domains declared (pd-mapper works here, patch 0011). ASM shared memory goes through
++ * SMMU stream 0x1721 (stock msm_audio_ion), which needs patch 0014 (hypervisor-owned context banks).
++ */
++/delete-node/ &gpr;
++
++&glink_edge {
++	apr {
++		compatible = "qcom,apr-v2";
++		qcom,glink-channels = "apr_audio_svc";
++		qcom,domain = <APR_DOMAIN_ADSP>;
++		#address-cells = <1>;
++		#size-cells = <0>;
++
++		service@3 {
++			compatible = "qcom,q6core";
++			reg = <APR_SVC_ADSP_CORE>;
++			qcom,protection-domain = "avs/audio", "msm/adsp/audio_pd";
++		};
++
++		q6afe: service@4 {
++			compatible = "qcom,q6afe";
++			reg = <APR_SVC_AFE>;
++			qcom,protection-domain = "avs/audio", "msm/adsp/audio_pd";
++
++			q6afedai: dais {
++				compatible = "qcom,q6afe-dais";
++				#address-cells = <1>;
++				#size-cells = <0>;
++				#sound-dai-cells = <1>;
++			};
++
++			q6afecc: clock-controller {
++				compatible = "qcom,q6afe-clocks";
++				#clock-cells = <2>;
++			};
++		};
++
++		q6asm: service@7 {
++			compatible = "qcom,q6asm";
++			reg = <APR_SVC_ASM>;
++			qcom,protection-domain = "avs/audio", "msm/adsp/audio_pd";
++
++			q6asmdai: dais {
++				compatible = "qcom,q6asm-dais";
++				#address-cells = <1>;
++				#size-cells = <0>;
++				#sound-dai-cells = <1>;
++				iommus = <&apps_smmu 0x1721 0x0>;
++
++				dai@0 {
++					reg = <MSM_FRONTEND_DAI_MULTIMEDIA1>;
++				};
++
++				dai@1 {
++					reg = <MSM_FRONTEND_DAI_MULTIMEDIA2>;
++				};
++
++				dai@2 {
++					reg = <MSM_FRONTEND_DAI_MULTIMEDIA3>;
++				};
++			};
++		};
++
++		q6adm: service@8 {
++			compatible = "qcom,q6adm";
++			reg = <APR_SVC_ADM>;
++			qcom,protection-domain = "avs/audio", "msm/adsp/audio_pd";
++
++			q6routing: routing {
++				compatible = "qcom,q6adm-routing";
++				#sound-dai-cells = <0>;
++			};
++		};
++	};
++};
++
++&pil_gpu_mem {
++	reg = <0x0 0x97b15000 0x0 0x2000>;
++};
++
++/*
++ * Hardware hazards found on this SoC family. Both were also hit by the Redmi Note 7 Pro port
++ * (github.com/VipinVIP/violet-sm6150-mainline); the TLMM one needs more reservations on this phone.
++ */
++
++/*
++ * TLMM: eight GPIOs are owned by the secure world and must not be read: gpio0-3 (WEST tile) and gpio6-9
++ * (EAST tile), probably the first two QUP serial engines kept for something like a fingerprint sensor or a
++ * secure element. A read of gpio0 or gpio1 hangs the CPU; a read of gpio2, 3 or 6-9 raises a synchronous
++ * external abort. The pin controller reads the control register of every valid line when it registers the
++ * gpio chip, so a single one of these being valid kills the probe (the oops is in msm_gpio_get_direction).
++ *
++ * Found by reading every pin through /dev/mem from userspace, one child process per pin, and recording the
++ * child's exit status (a child killed by SIGBUS is an abort, a child that never returns is a wedge); the
++ * other 115 pins read back plausible register values, and the kernel then registered the chip and dumped all
++ * of them. The Redmi Note 7 Pro port reserves only <0 4>, which is not enough here (gpio6 aborts).
++ *
++ * gpio123 is UFS_RESET (its register is at west tile + 0x9f000, outside the 0x1000 * id pattern); it was
++ * not scanned and nothing here uses it, so it stays reserved as a precaution.
++ */
++&tlmm {
++	gpio-reserved-ranges = <0 4>, <6 4>, <123 1>;
++};
++
++/* aggre1_noc QoS writes hang the CPU: leave it unclocked so they are skipped. */
++&aggre1_noc {
++	/delete-property/ clocks;
++};
++
++/*
++ * Adreno 612. Needs msm.ko loaded with separate_gpu_kms=1 while no display subsystem is enabled (the
++ * display stays on simpledrm), which gives a render-only DRM device. Firmware: a630_sqe.fw and a612_rgmu.bin
++ * are found through /lib/firmware/qcom (symlinks to /lib/firmware/postmarketos/, left by the downstream
++ * install). The zap shader is signed for this phone by the vendor, so it must come from the stock firmware:
++ * the split a612_zap.mdt + .b00-.b02 already in /lib/firmware/postmarketos/.
++ */
++&gpu {
++	status = "okay";
++};
++
++&gpu_zap_shader {
++	firmware-name = "postmarketos/a612_zap.mdt";
++};
++
++/*
++ * Touchscreen: FocalTech FT5452 on i2c1 (QUP0 SE1, gpio4/gpio5) at 0x38. Identified by reading its chip-id
++ * registers from userspace: 0xa3 = 0x54 and 0x9f = 0x52 (chip id 0x5452); nothing answers at 0x48, so the
++ * Himax variant listed in the stock tree is not fitted. The driver is edt-ft5x06 (CONFIG_TOUCHSCREEN_EDT_FT5X06).
++ * Power: the analog supply is a plain GPIO (gpio96) in the stock tree, so it is a fixed regulator here, and the
++ * I/O rail is pm6150 ldo13 (1.8 V). Reset is gpio88 (active low), the interrupt gpio89 (falling edge). All of
++ * these pins are outside the secure-world set reserved above.
++ */
++&gpi_dma0 {
++	status = "okay";
++};
++
++&qupv3_id_0 {
++	status = "okay";
++};
++
++&tlmm {
++	ts_int_default: ts-int-default-state {
++		pins = "gpio89";
++		function = "gpio";
++		drive-strength = <2>;
++		bias-pull-up;
++		input-enable;
++	};
++
++	ts_reset_default: ts-reset-default-state {
++		pins = "gpio88";
++		function = "gpio";
++		drive-strength = <2>;
++		bias-disable;
++	};
++
++	ts_avdd_default: ts-avdd-default-state {
++		pins = "gpio96";
++		function = "gpio";
++		drive-strength = <2>;
++		bias-disable;
++	};
++};
++
++/ {
++	ts_avdd: regulator-ts-avdd {
++		compatible = "regulator-fixed";
++		regulator-name = "ts_avdd";
++		/* the stock tree gives no voltage for this GPIO-switched rail; fixed regulators need a nominal one */
++		regulator-min-microvolt = <3300000>;
++		regulator-max-microvolt = <3300000>;
++		gpio = <&tlmm 96 GPIO_ACTIVE_HIGH>;
++		enable-active-high;
++		pinctrl-0 = <&ts_avdd_default>;
++		pinctrl-names = "default";
++	};
++};
++
++&i2c1 {
++	clock-frequency = <400000>;
++	status = "okay";
++
++	touchscreen@38 {
++		compatible = "focaltech,ft5452";
++		reg = <0x38>;
++		interrupt-parent = <&tlmm>;
++		interrupts = <89 IRQ_TYPE_EDGE_FALLING>;
++		reset-gpios = <&tlmm 88 GPIO_ACTIVE_LOW>;
++		vcc-supply = <&ts_avdd>;
++		iovcc-supply = <&vreg_l13a>;
++		pinctrl-0 = <&ts_int_default>, <&ts_reset_default>;
++		pinctrl-names = "default";
++		touchscreen-size-x = <1080>;
++		touchscreen-size-y = <2400>;
++	};
++};
++
++/*
++ * i2c3 (0x88c000; the vendor kernel calls it i2c2) carries the two Awinic
++ * aw87xxx speaker amplifiers (0x58, 0x5b), the FSA4480 USB-C audio switch
++ * (0x43), the BQ2597x charge pump (0x65) and the camera regulator (0x28).
++ * No client drivers are bound yet: enabling the bus lets /dev/i2c-N probe them.
++ */
++&i2c3 {
++	clock-frequency = <400000>;
++	status = "okay";
++};
++
++/* Camera flash LED (PM6150L). Vendor limits: torch 500 mA, flash 1.5 A, 1.28 s. */
++&pm6150l_flash {
++	status = "okay";
++
++	led-0 {
++		function = LED_FUNCTION_FLASH;
++		color = <LED_COLOR_ID_WHITE>;
++		led-sources = <1>;
++		led-max-microamp = <300000>;
++		flash-max-microamp = <1000000>;
++		flash-max-timeout-us = <1280000>;
++	};
++};
++
++/*
++ * The RTC is read-only (the vendor tree sets qcom,qpnp-rtc-write = 0): no
++ * allow-set-time, so the kernel only reads the time the firmware keeps.
++ */
++&pm6150_rtc {
++	status = "okay";
++};
++
++/*
++ * PM6150 ADC channels for the battery and charger, copied from the stock vadc@3100 node (same
++ * channel numbers and pre-scaling). bat_therm (0x4a, 100k pull-up) needs kernel patch 0009: without
++ * it the adc5 table has no entry for the channel and the whole ADC probe fails.
++ */
++&pm6150_adc {
++	channel@7 {
++		reg = <ADC5_USB_IN_I>;
++		qcom,pre-scaling = <1 1>;
++		label = "usb_in_i_uv";
++	};
++
++	channel@8 {
++		reg = <ADC5_USB_IN_V_16>;
++		qcom,pre-scaling = <1 16>;
++		label = "usb_in_v_div_16";
++	};
++
++	channel@9 {
++		reg = <ADC5_CHG_TEMP>;
++		qcom,pre-scaling = <1 1>;
++		label = "chg_temp";
++	};
++
++	channel@4a {
++		reg = <ADC5_BAT_THERM_100K_PU>;
++		qcom,ratiometric;
++		qcom,hw-settle-time = <200>;
++		qcom,pre-scaling = <1 1>;
++		label = "bat_therm";
++	};
++
++	channel@84 {
++		reg = <ADC5_VBAT_SNS>;
++		qcom,pre-scaling = <1 3>;
++		label = "vbat_sns";
++	};
++};
++
++/*
++ * Battery: the stock profile "m305-nvt-5000mah" (qcom,battery-data). Float voltage 4.45 V. The OCV
++ * tables are its pc-temp-v1-lut (discharge OCV vs. state of charge at 0/10/25/40/50 C), converted
++ * from 100 uV units; the 9..1 % rows are kept, duplicates dropped.
++ */
++/ {
++	battery: battery {
++		compatible = "simple-battery";
++		device-chemistry = "lithium-ion-polymer";
++		voltage-min-design-microvolt = <3400000>;
++		voltage-max-design-microvolt = <4450000>;
++		charge-full-design-microamp-hours = <5000000>;
++		constant-charge-current-max-microamp = <2000000>;	/* conservative; vendor uses up to 6 A with the bq2597x pump */
++		factory-internal-resistance-micro-ohms = <120000>;
++		ocv-capacity-celsius = <0 10 25 40 50>;
++		/* 0 C */
++		ocv-capacity-table-0 = <4416500 100 4397700 98 4376700 96 4354700 94 4331900 92 4308200 90
++			4284300 88 4260200 86 4236000 84 4212300 82 4188900 80 4165900 78
++			4143400 76 4121400 74 4100100 72 4079800 70 4059700 68 4039000 66
++			4018400 64 3999100 62 3982100 60 3964800 58 3943400 56 3917800 54
++			3897200 52 3883700 50 3873100 48 3864800 46 3858300 44 3852400 42
++			3846700 40 3841400 38 3836400 36 3831700 34 3827400 32 3823500 30
++			3820000 28 3815600 26 3808000 24 3797700 22 3786400 20 3772900 18
++			3757700 16 3740000 14 3727200 12 3718500 10 3716400 9 3715200 8
++			3711100 7 3698900 6 3662100 5 3612600 4 3549000 3 3461300 2
++			3319900 1 3000000 0>;
++		/* 10 C */
++		ocv-capacity-table-1 = <4426200 100 4407600 98 4388100 96 4368000 94 4346800 92 4324000 90
++			4300100 88 4276100 86 4251600 84 4227100 82 4203100 80 4179300 78
++			4156200 76 4133400 74 4111400 72 4090700 70 4070700 68 4050900 66
++			4031800 64 4012000 62 3988700 60 3961600 58 3937500 56 3917800 54
++			3900900 52 3888400 50 3879000 48 3870300 46 3861600 44 3853400 42
++			3845800 40 3838500 38 3832000 36 3826500 34 3821600 32 3817000 30
++			3813000 28 3808500 26 3801200 24 3790900 22 3779300 20 3766100 18
++			3751200 16 3733700 14 3720200 12 3712800 10 3710200 9 3708500 8
++			3705200 7 3692800 6 3655900 5 3606900 4 3543800 3 3456400 2
++			3315600 1 3000000 0>;
++		/* 25 C */
++		ocv-capacity-table-2 = <4434100 100 4418300 98 4398600 96 4378800 94 4358300 92 4336700 90
++			4313700 88 4289500 86 4265100 84 4240300 82 4215700 80 4191600 78
++			4167700 76 4144300 74 4121400 72 4099100 70 4077800 68 4057200 66
++			4037500 64 4019300 62 3999300 60 3972600 58 3943400 56 3922700 54
++			3907800 52 3895000 50 3883300 48 3872800 46 3862600 44 3852600 42
++			3843500 40 3835400 38 3828100 36 3821500 34 3815800 32 3810300 30
++			3805100 28 3799900 26 3792800 24 3782900 22 3771500 20 3758900 18
++			3744600 16 3727800 14 3714600 12 3707000 10 3705000 9 3703100 8
++			3700200 7 3686100 6 3649000 5 3600200 4 3537100 3 3450600 2
++			3311300 1 3000000 0>;
++		/* 40 C */
++		ocv-capacity-table-3 = <4435900 100 4418500 98 4400200 96 4381100 94 4361200 92 4340100 90
++			4317600 88 4293600 86 4269200 84 4244600 82 4220000 80 4195900 78
++			4172000 76 4148500 74 4125400 72 4102800 70 4081000 68 4060000 66
++			4039900 64 4021800 62 4002800 60 3978200 58 3949600 56 3927600 54
++			3912000 52 3898600 50 3885400 48 3873200 46 3862200 44 3852300 42
++			3843200 40 3834800 38 3826900 36 3819600 34 3812700 32 3806100 30
++			3799600 28 3793200 26 3785000 24 3774400 22 3762600 20 3749900 18
++			3736000 16 3720000 14 3707300 12 3700400 10 3698200 9 3696600 8
++			3693100 7 3676500 6 3639600 5 3591200 4 3528800 3 3442800 2
++			3306600 1 3000000 0>;
++		/* 50 C */
++		ocv-capacity-table-4 = <4437200 100 4419600 98 4401400 96 4382400 94 4362300 92 4341100 90
++			4319000 88 4295700 86 4271800 84 4247500 82 4222700 80 4198400 78
++			4174100 76 4150200 74 4127000 72 4104300 70 4082600 68 4061700 66
++			4041600 64 4023000 62 4004000 60 3980400 58 3952400 56 3929800 54
++			3913800 52 3900200 50 3886700 48 3873800 46 3862300 44 3852200 42
++			3843000 40 3834400 38 3826500 36 3818900 34 3811700 32 3804500 30
++			3796900 28 3789000 26 3779800 24 3768900 22 3756700 20 3743200 18
++			3728600 16 3711900 14 3700300 12 3694500 10 3692500 9 3690600 8
++			3686200 7 3666700 6 3629400 5 3580600 4 3517600 3 3430700 2
++			3291800 1 3000000 0>;
++	};
++};
++
++&pm6150_lsid0 {
++	/*
++	 * QGauge (fuel gauge) and its SDAM. Driven read-only by qcom_qg_lite (patch 0010): the bootloader
++	 * leaves it measuring; SDAM holds the last saved SOC (0x47) and the learned capacity (0x68).
++	 */
++	qgauge@4800 {
++		compatible = "qcom,pm6150-qg";
++		reg = <0x4800>, <0xb600>;
++		io-channels = <&pm6150_adc ADC5_BAT_THERM_100K_PU>,
++			      <&pm6150_adc ADC5_USB_IN_V_16>;
++		io-channel-names = "batt_therm", "usb_in_v";
++		monitored-battery = <&battery>;
++		power-supplies = <&pm6150_charger>;	/* status comes from the charger while plugged in */
++	};
++
++	/*
++	 * SMB5 charger (patch 0008). The module is blacklisted in /etc/modprobe.d until it is tested by
++	 * hand: it reprograms the input current limit and charging enable.
++	 */
++	pm6150_charger: charger@1000 {
++		compatible = "qcom,pm8150b-charger";
++		reg = <0x1000>;
++
++		interrupts = <0x0 0x13 0x4 IRQ_TYPE_EDGE_BOTH>,
++			     <0x0 0x12 0x2 IRQ_TYPE_EDGE_BOTH>,
++			     <0x0 0x16 0x1 IRQ_TYPE_EDGE_RISING>,
++			     <0x0 0x13 0x7 IRQ_TYPE_EDGE_RISING>;
++		interrupt-names = "usbin-plugin", "bat-ov", "wdog-bark", "usbin-icl-change";
++
++		io-channels = <&pm6150_adc ADC5_USB_IN_I>,
++			      <&pm6150_adc ADC5_USB_IN_V_16>;
++		io-channel-names = "usb_in_i_uv", "usb_in_v_div_16";
++
++		monitored-battery = <&battery>;
++	};
++};
++
++/*
++ * Display: the real MDSS/DPU/DSI stack. The panel is a Samsung-style 1080x2400 AMOLED in video mode
++ * (stock node qcom,mdss_dsi_k7_38_0c_0a_video); brightness is the DCS 0x51 command, which the panel driver
++ * exposes as a backlight. The bootloader leaves the lab/ibb (LCDB) bias rails on and nothing here controls
++ * them, so they are not listed. framebuffer0 stays until msm.ko takes the display over.
++ *
++ * Stock panel supplies: vddio = pm6150 L13 (1.8 V), vdda-3p3 = pm6150 L18 (3.0 V). The DSI host takes
++ * vdda-1p2 = pm6150L L3 and the PHY vdda-0p9 = pm6150 L4.
++ */
++&tlmm {
++	panel_reset_default: panel-reset-default-state {
++		pins = "gpio91";
++		function = "gpio";
++		drive-strength = <8>;
++		bias-disable;
++	};
++};
++
++&mdss {
++	status = "okay";
++};
++
++&mdss_mdp {
++	status = "okay";
++};
++
++&mdss_dsi0 {
++	vdda-supply = <&vreg_l3c>;
++	status = "okay";
++
++	panel@0 {
++		compatible = "xiaomi,mojito-k7-panel";
++		reg = <0>;
++
++		vddio-supply = <&vreg_l13a>;
++		vci-supply = <&vreg_l18a>;
++		reset-gpios = <&tlmm 91 GPIO_ACTIVE_LOW>;
++
++		pinctrl-0 = <&panel_reset_default>;
++		pinctrl-names = "default";
++
++		port {
++			panel_in: endpoint {
++				remote-endpoint = <&mdss_dsi0_out>;
++			};
++		};
++	};
++};
++
++&mdss_dsi0_out {
++	remote-endpoint = <&panel_in>;
++	data-lanes = <0 1 2 3>;
++};
++
++&mdss_dsi0_phy {
++	vdda-supply = <&vreg_l4a>;
++	status = "okay";
++};
++
++/*
++ * Modem (MPSS) and IPA. All values are from the stock tree (qcom,mss@4080000 pas-id 4,
++ * qcom,smp2p-modem, the "modem" glink edge, qcom,ipa@1e00000 hw-ver 0x10); the layout follows the
++ * Redmi Note 7 Pro port (github.com/VipinVIP/violet-sm6150-mainline), which runs the same SoC's
++ * modem. talos.dtsi (QCS615) has no modem, so none of this exists upstream.
++ * The modem does not start on its own (auto_boot = false for sm8150-mpss-pas): start it with
++ * echo start > /sys/class/remoteproc/remoteprocN/state after rmtfs and pd-mapper are up.
++ */
++&soc {
++	smp2p-mpss {
++		compatible = "qcom,smp2p";
++		qcom,smem = <435>, <428>;
++		interrupts = <GIC_SPI 451 IRQ_TYPE_EDGE_RISING 0>;
++		mboxes = <&apss_shared 14>;
++		qcom,local-pid = <0>;
++		qcom,remote-pid = <1>;
++
++		mpss_smp2p_out: master-kernel {
++			qcom,entry-name = "master-kernel";
++			#qcom,smem-state-cells = <1>;
++		};
++
++		mpss_smp2p_in: slave-kernel {
++			qcom,entry-name = "slave-kernel";
++			interrupt-controller;
++			#interrupt-cells = <2>;
++		};
++
++		/* used by the modem to report on the WLAN subsystem it hosts */
++		mpss_smp2p_wlan_in: wlan {
++			qcom,entry-name = "wlan";
++			interrupt-controller;
++			#interrupt-cells = <2>;
++		};
++
++		/* IPA clock query / setup-ready handshake */
++		mpss_smp2p_ipa_out: ipa-ap-to-modem {
++			qcom,entry-name = "ipa";
++			#qcom,smem-state-cells = <1>;
++		};
++
++		mpss_smp2p_ipa_in: ipa-modem-to-ap {
++			qcom,entry-name = "ipa";
++			interrupt-controller;
++			#interrupt-cells = <2>;
++		};
++	};
++
++	/*
++	 * IPA v4.2 (stock qcom,ipa-hw-ver = 0x10), the same as sc7180. Unlike the Redmi Note 7 Pro,
++	 * this phone ships ipa_fws (stock qcom,ipa_fws node, PAS id 15), so the AP loads the GSI
++	 * firmware into ipa-fw@97b00000 ("self"); with "modem" the modem never starts the handshake.
++	 */
++	ipa: ipa@1e40000 {
++		compatible = "qcom,sc7180-ipa";
++		reg = <0x0 0x01e40000 0x0 0x7000>,
++		      <0x0 0x01e47000 0x0 0x2000>,
++		      <0x0 0x01e04000 0x0 0x2c000>;
++		reg-names = "ipa-reg", "ipa-shared", "gsi";
++
++		iommus = <&apps_smmu 0x1520 0x0>,
++			 <&apps_smmu 0x1522 0x0>;
++
++		interrupts-extended = <&intc GIC_SPI 311 IRQ_TYPE_EDGE_RISING 0>,
++				      <&intc GIC_SPI 432 IRQ_TYPE_LEVEL_HIGH 0>,
++				      <&mpss_smp2p_ipa_in 0 IRQ_TYPE_EDGE_RISING>,
++				      <&mpss_smp2p_ipa_in 1 IRQ_TYPE_EDGE_RISING>;
++		interrupt-names = "ipa", "gsi", "ipa-clock-query", "ipa-setup-ready";
++
++		clocks = <&rpmhcc RPMH_IPA_CLK>;
++		clock-names = "core";
++
++		interconnects = <&aggre1_noc MASTER_IPA QCOM_ICC_TAG_ALWAYS
++				 &mc_virt SLAVE_EBI1 QCOM_ICC_TAG_ALWAYS>,
++				<&aggre1_noc MASTER_IPA QCOM_ICC_TAG_ALWAYS
++				 &system_noc SLAVE_IMEM QCOM_ICC_TAG_ALWAYS>,
++				<&gem_noc MASTER_APPSS_PROC QCOM_ICC_TAG_ALWAYS
++				 &config_noc SLAVE_IPA_CFG QCOM_ICC_TAG_ALWAYS>;
++		interconnect-names = "memory", "imem", "config";
++
++		qcom,qmp = <&aoss_qmp>;
++
++		qcom,smem-states = <&mpss_smp2p_ipa_out 0>,
++				   <&mpss_smp2p_ipa_out 1>;
++		qcom,smem-state-names = "ipa-clock-enabled-valid",
++					"ipa-clock-enabled";
++
++		qcom,gsi-loader = "self";
++		memory-region = <&ipa_fw_mem>;
++		firmware-name = "postmarketos/ipa_fws.mdt";
++	};
++
++	remoteproc_mpss: remoteproc@4080000 {
++		compatible = "qcom,sm8150-mpss-pas";
++		reg = <0x0 0x04080000 0x0 0x4040>;
++
++		interrupts-extended = <&intc GIC_SPI 266 IRQ_TYPE_EDGE_RISING 0>,
++				      <&mpss_smp2p_in 0 IRQ_TYPE_EDGE_RISING>,
++				      <&mpss_smp2p_in 1 IRQ_TYPE_EDGE_RISING>,
++				      <&mpss_smp2p_in 2 IRQ_TYPE_EDGE_RISING>,
++				      <&mpss_smp2p_in 3 IRQ_TYPE_EDGE_RISING>,
++				      <&mpss_smp2p_in 7 IRQ_TYPE_EDGE_RISING>;
++		interrupt-names = "wdog", "fatal", "ready", "handover", "stop-ack", "shutdown-ack";
++
++		clocks = <&rpmhcc RPMH_CXO_CLK>;
++		clock-names = "xo";
++
++		power-domains = <&rpmhpd RPMHPD_CX>, <&rpmhpd RPMHPD_MSS>;	/* MSS: patch 0013 */
++		power-domain-names = "cx", "mss";
++
++		memory-region = <&mpss_mem>;
++
++		pinctrl-names = "default";
++		pinctrl-0 = <&cnss_wlan_en_active>;
++
++		qcom,qmp = <&aoss_qmp>;
++
++		qcom,smem-states = <&mpss_smp2p_out 0>;
++		qcom,smem-state-names = "stop";
++
++		firmware-name = "postmarketos/modem.mdt";
++
++		glink-edge {
++			interrupts-extended = <&intc GIC_SPI 449 IRQ_TYPE_EDGE_RISING 0>;
++			mboxes = <&apss_shared 12>;
++			label = "mpss";
++			qcom,remote-pid = <1>;
++		};
++	};
++};
++
++/*
++ * Wi-Fi: WCN3990 on SNOC (ath10k_snoc). Values from the stock qcom,icnss@18800000 node: SID 0x1640
++ * (mask 1), CE interrupts SPI 414-425 (four interrupt cells on this GIC), the stock 2 MB wlan_msa_region
++ * (the firmware asks for 0x4000 + 0x1fc000), supplies pm6150 L9 (cx-mx), pm6150l L1 (1.8 XO), L2 (1.3 RFA),
++ * L10 (3.3 CH0), here routed through the upstream WCN3990 PMU / power-sequencing node below.
++ * The WLAN firmware (wlanmdsp.mbn) is fetched by the modem from the phone through tqftpserv at modem boot.
++ *
++ * NOT WORKING, so disabled: the modem's WLAN service answers every request, but its first power-up
++ * inside the capability request fails after ~200 ms (ath10k: "capability req rejected: 119"). Tested on
++ * hardware without any change: rails and their order, GPIO 98 (see below), PMU/pwrseq, always-on rails,
++ * MSA size and permissions (with and without qcom,msa-fixed-perm), host capability message variants,
++ * VBATT_REQ, waiting for MSA_READY_IND, board data first, firmware build, writable file-based rmtfs.
++ * See HANDOFF.md "Wi-Fi" for the whole investigation and what is left.
++ */
++/*
++ * WLAN enable. The stock tree defines GPIO 98 as "cnss_wlan_en_active" (output-high, pull-up, 16 mA drive) and the
++ * working Redmi Note 7 Pro port drives it high from kernel start; it reads low if left alone. A plain gpio-hog only
++ * gave "out high, pull down, 2 mA", so use the exact stock pin state instead, bound to the modem node so it is applied
++ * before the modem (and its WLAN process) starts.
++ */
++&tlmm {
++	cnss_wlan_en_active: cnss-wlan-en-active-state {
++		pins = "gpio98";
++		function = "gpio";
++		drive-strength = <16>;
++		bias-pull-up;
++		output-high;
++	};
++};
++
++/*
++ * WCN3990 PMU, the community way (upstream power sequencing, drivers/power/sequencing/pwrseq-qcom-wcn.c, used by
++ * the SDM845 and SM8150 boards): it brings up VDD_IO first, then XO/RF/CH0/CH1, then waits 50 ms, and ath10k_snoc
++ * powers the chip through it when its supplies come from this node. L10a stays always-on (see its comment).
++ * No swctrl-gpios: the sw-ctrl pin of this SoC family was not found, and the driver does not read the property.
++ */
++/ {
++	wcn3990-pmu {
++		compatible = "qcom,wcn3990-pmu";
++
++		vddio-supply = <&vreg_l10a>;
++		vddxo-supply = <&vreg_l1c>;
++		vddrf-supply = <&vreg_l2c>;
++		vddch0-supply = <&vreg_l10c>;
++		vddch1-supply = <&vreg_l11c>;
++
++		regulators {
++			vreg_pmu_io: ldo0 {
++				regulator-name = "vreg_pmu_io";
++			};
++
++			vreg_pmu_xo: ldo1 {
++				regulator-name = "vreg_pmu_xo";
++			};
++
++			vreg_pmu_rf: ldo2 {
++				regulator-name = "vreg_pmu_rf";
++			};
++
++			vreg_pmu_ch0: ldo3 {
++				regulator-name = "vreg_pmu_ch0";
++			};
++
++			vreg_pmu_ch1: ldo4 {
++				regulator-name = "vreg_pmu_ch1";
++			};
++		};
++	};
++};
++
++&soc {
++	wifi@18800000 {
++		compatible = "qcom,wcn3990-wifi";
++		reg = <0x0 0x18800000 0x0 0x800000>;
++		reg-names = "membase";
++
++		iommus = <&apps_smmu 0x1640 0x1>;
++
++		interrupts = <GIC_SPI 414 IRQ_TYPE_LEVEL_HIGH 0>,
++			     <GIC_SPI 415 IRQ_TYPE_LEVEL_HIGH 0>,
++			     <GIC_SPI 416 IRQ_TYPE_LEVEL_HIGH 0>,
++			     <GIC_SPI 417 IRQ_TYPE_LEVEL_HIGH 0>,
++			     <GIC_SPI 418 IRQ_TYPE_LEVEL_HIGH 0>,
++			     <GIC_SPI 419 IRQ_TYPE_LEVEL_HIGH 0>,
++			     <GIC_SPI 420 IRQ_TYPE_LEVEL_HIGH 0>,
++			     <GIC_SPI 421 IRQ_TYPE_LEVEL_HIGH 0>,
++			     <GIC_SPI 422 IRQ_TYPE_LEVEL_HIGH 0>,
++			     <GIC_SPI 423 IRQ_TYPE_LEVEL_HIGH 0>,
++			     <GIC_SPI 424 IRQ_TYPE_LEVEL_HIGH 0>,
++			     <GIC_SPI 425 IRQ_TYPE_LEVEL_HIGH 0>;
++
++		vdd-0.8-cx-mx-supply = <&vreg_l9a>;
++		/* from the WCN3990 PMU node above (pwrseq), not straight from the PMIC rails */
++		vdd-1.8-xo-supply = <&vreg_pmu_xo>;
++		vdd-1.3-rfa-supply = <&vreg_pmu_rf>;
++		vdd-3.3-ch0-supply = <&vreg_pmu_ch0>;
++
++		memory-region = <&wlan_msa_mem>;
++
++		vdd-3.3-ch1-supply = <&vreg_pmu_ch1>;
++
++		/* NOT WORKING YET (see HANDOFF.md "Wi-Fi"); enable to test, ath10k_snoc is blacklisted on the phone */
++		status = "disabled";
++	};
++};
+diff --git a/drivers/firmware/qcom/qcom_tzmem.c b/drivers/firmware/qcom/qcom_tzmem.c
+index 0fd958127..e72a28e26 100644
+--- a/drivers/firmware/qcom/qcom_tzmem.c
++++ b/drivers/firmware/qcom/qcom_tzmem.c
+@@ -83,6 +83,7 @@ static const char *const qcom_tzmem_blacklist[] = {
+ 	"qcom,sdm670", /* failure in GPU firmware loading */
+ 	"qcom,sdm845", /* reset in rmtfs memory assignment */
+ 	"qcom,sm7150", /* reset in rmtfs memory assignment */
++	"qcom,sm6150", /* PAS_INIT_IMAGE is rejected once Linux enables the SHM bridge */
+ 	"qcom,sm8150", /* reset in rmtfs memory assignment */
+ 	NULL
+ };
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c
+index da3556eb6..3c082d647 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c
+@@ -1135,6 +1135,26 @@ unsigned long dpu_kms_get_clk_rate(struct dpu_kms *dpu_kms, char *clock_name)
+ 
+ #define	DPU_PERF_DEFAULT_MAX_CORE_CLK_RATE	412500000
+ 
++/*
++ * The bootloader leaves its splash scanning out through an INTF timing engine. While that engine runs
++ * the DSI video engine stays busy, the DSI host is reset underneath it and a video mode panel cannot
++ * receive its init sequence (every command times out). Stop the timing engines of the DSI interfaces
++ * before anything touches the DSI link; the first atomic commit starts them again with the real mode.
++ */
++static void dpu_kms_stop_bootloader_timing(struct dpu_kms *dpu_kms)
++{
++	int i;
++
++	for (i = INTF_0; i < INTF_MAX; i++) {
++		struct dpu_hw_intf *intf = dpu_rm_get_intf(&dpu_kms->rm, i);
++
++		if (!intf || !intf->cap || intf->cap->type != INTF_DSI)
++			continue;
++		if (intf->ops.enable_timing)
++			intf->ops.enable_timing(intf, 0);
++	}
++}
++
+ static int dpu_kms_hw_init(struct msm_kms *kms)
+ {
+ 	struct dpu_kms *dpu_kms;
+@@ -1203,6 +1223,8 @@ static int dpu_kms_hw_init(struct msm_kms *kms)
+ 		goto err_pm_put;
+ 	}
+ 
++	dpu_kms_stop_bootloader_timing(dpu_kms);
++
+ 	dpu_kms->hw_mdp = dpu_hw_mdptop_init(dev,
+ 					     dpu_kms->catalog->mdp,
+ 					     dpu_kms->mmio,
+diff --git a/drivers/gpu/drm/panel/Kconfig b/drivers/gpu/drm/panel/Kconfig
+index 3eac4d0f8..fac991a05 100644
+--- a/drivers/gpu/drm/panel/Kconfig
++++ b/drivers/gpu/drm/panel/Kconfig
+@@ -1348,4 +1348,16 @@ config DRM_PANEL_XINPENG_XPP055C272
+ 	  Say Y here if you want to enable support for the Xinpeng
+ 	  XPP055C272 controller for 720x1280 LCD panels with MIPI/RGB/SPI
+ 	  system interfaces.
++config DRM_PANEL_XIAOMI_MOJITO_K7
++	tristate "Xiaomi Redmi Note 10 (mojito) k7 AMOLED DSI panel"
++	depends on OF
++	depends on DRM_MIPI_DSI
++	depends on BACKLIGHT_CLASS_DEVICE
++	select DRM_KMS_HELPER
++	help
++	  Say Y here if you want to enable support for the 1080x2400 AMOLED
++	  video-mode DSI panel in the Xiaomi Redmi Note 10 (mojito / sunny).
++	  Brightness is a DCS command, so this also registers a backlight
++	  device.
++
+ endmenu
+diff --git a/drivers/gpu/drm/panel/Makefile b/drivers/gpu/drm/panel/Makefile
+index c2c5cf817..1fba69ff5 100644
+--- a/drivers/gpu/drm/panel/Makefile
++++ b/drivers/gpu/drm/panel/Makefile
+@@ -131,3 +131,4 @@ obj-$(CONFIG_DRM_PANEL_VISIONOX_VTDR6130) += panel-visionox-vtdr6130.o
+ obj-$(CONFIG_DRM_PANEL_VISIONOX_R66451) += panel-visionox-r66451.o
+ obj-$(CONFIG_DRM_PANEL_WIDECHIPS_WS2401) += panel-widechips-ws2401.o
+ obj-$(CONFIG_DRM_PANEL_XINPENG_XPP055C272) += panel-xinpeng-xpp055c272.o
++obj-$(CONFIG_DRM_PANEL_XIAOMI_MOJITO_K7) += panel-xiaomi-mojito-k7.o
+diff --git a/drivers/gpu/drm/panel/panel-xiaomi-mojito-k7.c b/drivers/gpu/drm/panel/panel-xiaomi-mojito-k7.c
+new file mode 100644
+index 000000000..93c72e8f7
+--- /dev/null
++++ b/drivers/gpu/drm/panel/panel-xiaomi-mojito-k7.c
+@@ -0,0 +1,300 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Xiaomi Redmi Note 10 (mojito / sunny) "k7 38 0c 0a" 1080x2400 AMOLED DSI video panel.
++ *
++ * The init and power-off sequences, the timings, the reset sequence and the DCS brightness
++ * range (0x51, 11 bit, big endian, 0..0x7ff) come from the stock downstream device tree
++ * (qcom,mdss_dsi_k7_38_0c_0a_video). The panel has no separate backlight chip: brightness is a
++ * DCS command, so the backlight device below writes 0x51.
++ */
++
++#include <linux/backlight.h>
++#include <linux/delay.h>
++#include <linux/gpio/consumer.h>
++#include <linux/mod_devicetable.h>
++#include <linux/module.h>
++#include <linux/regulator/consumer.h>
++
++#include <video/mipi_display.h>
++
++#include <drm/drm_mipi_dsi.h>
++#include <drm/drm_modes.h>
++#include <drm/drm_panel.h>
++#include <drm/drm_probe_helper.h>
++
++#define MOJITO_K7_MAX_BRIGHTNESS	0x7ff
++
++struct mojito_k7 {
++	struct drm_panel panel;
++	struct mipi_dsi_device *dsi;
++	struct regulator_bulk_data supplies[2];
++	struct gpio_desc *reset_gpio;
++	struct backlight_device *bl;
++	bool on;
++};
++
++static inline struct mojito_k7 *to_mojito_k7(struct drm_panel *panel)
++{
++	return container_of(panel, struct mojito_k7, panel);
++}
++
++static void mojito_k7_reset(struct mojito_k7 *ctx)
++{
++	/* Stock reset sequence: <0 1> <1 5>, i.e. 1 ms low, then high and 5 ms. */
++	gpiod_set_value_cansleep(ctx->reset_gpio, 1);
++	usleep_range(1000, 2000);
++	gpiod_set_value_cansleep(ctx->reset_gpio, 0);
++	usleep_range(5000, 6000);
++}
++
++static int mojito_k7_set_brightness(struct mojito_k7 *ctx, u16 brightness)
++{
++	return mipi_dsi_dcs_set_display_brightness_large(ctx->dsi, brightness);
++}
++
++static int mojito_k7_on(struct mojito_k7 *ctx)
++{
++	struct mipi_dsi_multi_context dsi_ctx = { .dsi = ctx->dsi };
++
++	ctx->dsi->mode_flags |= MIPI_DSI_MODE_LPM;
++
++	mipi_dsi_dcs_exit_sleep_mode_multi(&dsi_ctx);
++	mipi_dsi_msleep(&dsi_ctx, 20);
++
++	mipi_dsi_dcs_set_tear_on_multi(&dsi_ctx, MIPI_DSI_DCS_TEAR_MODE_VBLANK);
++
++	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0xfc, 0x5a, 0x5a);
++	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0xb0, 0x03, 0xed);
++	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0xed, 0x40, 0x04, 0x08, 0xa8, 0x84, 0x4a, 0x73, 0x02, 0x0a);
++	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0xed, 0x01, 0xcd, 0x00);
++	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0xe1, 0x93);
++	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0xe4, 0x08);
++	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0xfc, 0xa5, 0xa5);
++	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0xf0, 0x5a, 0x5a);
++	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0xdf, 0x09, 0x30, 0x95, 0x43, 0x99, 0x05, 0x00, 0x27,
++				     0x50, 0x2e, 0x4f, 0x7a, 0x77, 0x10, 0x3d, 0x73, 0x00, 0xff,
++				     0x01, 0x8b, 0x08);
++	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0xb0, 0x03);
++	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0xcd, 0x04);
++	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0xcd, 0x01);
++	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0xb0, 0x06, 0xb3);
++	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0xb3, 0x10);
++	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0xb0, 0x05, 0xb3);
++	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0xb3, 0x93);
++	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0xb3, 0x11, 0x4f);
++	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0xf0, 0xa5, 0xa5);
++
++	/* Write CTRL display (brightness control on), brightness 0, ACL off. */
++	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, MIPI_DCS_WRITE_CONTROL_DISPLAY, 0x20);
++	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, MIPI_DCS_SET_DISPLAY_BRIGHTNESS, 0x00, 0x00);
++	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, MIPI_DCS_WRITE_POWER_SAVE, 0x00);
++
++	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0xf0, 0x5a, 0x5a);
++	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0xb0, 0xb1, 0xb5);
++	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0xb5, 0x00);
++	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0xf0, 0xa5, 0xa5);
++	mipi_dsi_msleep(&dsi_ctx, 100);
++
++	return dsi_ctx.accum_err;
++}
++
++static int mojito_k7_off(struct mojito_k7 *ctx)
++{
++	struct mipi_dsi_multi_context dsi_ctx = { .dsi = ctx->dsi };
++
++	ctx->dsi->mode_flags |= MIPI_DSI_MODE_LPM;
++
++	mipi_dsi_dcs_set_display_off_multi(&dsi_ctx);
++	mipi_dsi_dcs_enter_sleep_mode_multi(&dsi_ctx);
++	mipi_dsi_msleep(&dsi_ctx, 150);
++
++	return dsi_ctx.accum_err;
++}
++
++static int mojito_k7_prepare(struct drm_panel *panel)
++{
++	struct mojito_k7 *ctx = to_mojito_k7(panel);
++	struct device *dev = &ctx->dsi->dev;
++	int ret;
++
++	ret = regulator_bulk_enable(ARRAY_SIZE(ctx->supplies), ctx->supplies);
++	if (ret < 0) {
++		dev_err(dev, "failed to enable regulators: %d\n", ret);
++		return ret;
++	}
++	/* vddio needs 20 ms before reset in the stock panel supply table. */
++	msleep(20);
++
++	mojito_k7_reset(ctx);
++
++	ret = mojito_k7_on(ctx);
++	if (ret < 0) {
++		dev_err(dev, "failed to initialize the panel: %d\n", ret);
++		gpiod_set_value_cansleep(ctx->reset_gpio, 1);
++		regulator_bulk_disable(ARRAY_SIZE(ctx->supplies), ctx->supplies);
++		return ret;
++	}
++
++	return 0;
++}
++
++static int mojito_k7_enable(struct drm_panel *panel)
++{
++	struct mojito_k7 *ctx = to_mojito_k7(panel);
++	struct mipi_dsi_multi_context dsi_ctx = { .dsi = ctx->dsi };
++
++	mipi_dsi_dcs_set_display_on_multi(&dsi_ctx);
++	if (dsi_ctx.accum_err)
++		return dsi_ctx.accum_err;
++
++	ctx->on = true;
++	/* Restore the brightness the backlight device asked for while the panel was off. */
++	return mojito_k7_set_brightness(ctx, backlight_get_brightness(ctx->bl));
++}
++
++static int mojito_k7_disable(struct drm_panel *panel)
++{
++	struct mojito_k7 *ctx = to_mojito_k7(panel);
++
++	ctx->on = false;
++	return 0;
++}
++
++static int mojito_k7_unprepare(struct drm_panel *panel)
++{
++	struct mojito_k7 *ctx = to_mojito_k7(panel);
++	struct device *dev = &ctx->dsi->dev;
++	int ret;
++
++	ret = mojito_k7_off(ctx);
++	if (ret < 0)
++		dev_err(dev, "failed to power the panel off: %d\n", ret);
++
++	gpiod_set_value_cansleep(ctx->reset_gpio, 1);
++	regulator_bulk_disable(ARRAY_SIZE(ctx->supplies), ctx->supplies);
++
++	return 0;
++}
++
++/* 1080x2400 @ 60 Hz: h 92/16/68, v 21/4/7 (stock timing node). */
++static const struct drm_display_mode mojito_k7_mode = {
++	.clock = (1080 + 92 + 16 + 68) * (2400 + 21 + 4 + 7) * 60 / 1000,
++	.hdisplay = 1080,
++	.hsync_start = 1080 + 92,
++	.hsync_end = 1080 + 92 + 16,
++	.htotal = 1080 + 92 + 16 + 68,
++	.vdisplay = 2400,
++	.vsync_start = 2400 + 21,
++	.vsync_end = 2400 + 21 + 4,
++	.vtotal = 2400 + 21 + 4 + 7,
++	.width_mm = 67,
++	.height_mm = 149,
++	.type = DRM_MODE_TYPE_DRIVER | DRM_MODE_TYPE_PREFERRED,
++};
++
++static int mojito_k7_get_modes(struct drm_panel *panel, struct drm_connector *connector)
++{
++	return drm_connector_helper_get_modes_fixed(connector, &mojito_k7_mode);
++}
++
++static const struct drm_panel_funcs mojito_k7_panel_funcs = {
++	.prepare = mojito_k7_prepare,
++	.enable = mojito_k7_enable,
++	.disable = mojito_k7_disable,
++	.unprepare = mojito_k7_unprepare,
++	.get_modes = mojito_k7_get_modes,
++};
++
++static int mojito_k7_bl_update_status(struct backlight_device *bl)
++{
++	struct mojito_k7 *ctx = bl_get_data(bl);
++
++	/* Applied from enable() once the panel is on. */
++	if (!ctx->on)
++		return 0;
++
++	return mojito_k7_set_brightness(ctx, backlight_get_brightness(bl));
++}
++
++static const struct backlight_ops mojito_k7_bl_ops = {
++	.update_status = mojito_k7_bl_update_status,
++};
++
++static int mojito_k7_probe(struct mipi_dsi_device *dsi)
++{
++	struct device *dev = &dsi->dev;
++	struct backlight_properties props = {
++		.type = BACKLIGHT_RAW,
++		.brightness = MOJITO_K7_MAX_BRIGHTNESS / 2,
++		.max_brightness = MOJITO_K7_MAX_BRIGHTNESS,
++	};
++	struct mojito_k7 *ctx;
++	int ret;
++
++	ctx = devm_drm_panel_alloc(dev, struct mojito_k7, panel, &mojito_k7_panel_funcs,
++				   DRM_MODE_CONNECTOR_DSI);
++	if (IS_ERR(ctx))
++		return PTR_ERR(ctx);
++
++	ctx->supplies[0].supply = "vddio";
++	ctx->supplies[1].supply = "vci";
++	ret = devm_regulator_bulk_get(dev, ARRAY_SIZE(ctx->supplies), ctx->supplies);
++	if (ret < 0)
++		return dev_err_probe(dev, ret, "failed to get regulators\n");
++
++	ctx->reset_gpio = devm_gpiod_get(dev, "reset", GPIOD_OUT_HIGH);
++	if (IS_ERR(ctx->reset_gpio))
++		return dev_err_probe(dev, PTR_ERR(ctx->reset_gpio), "failed to get reset gpio\n");
++
++	ctx->dsi = dsi;
++	mipi_dsi_set_drvdata(dsi, ctx);
++
++	dsi->lanes = 4;
++	dsi->format = MIPI_DSI_FMT_RGB888;
++	dsi->mode_flags = MIPI_DSI_MODE_VIDEO | MIPI_DSI_CLOCK_NON_CONTINUOUS | MIPI_DSI_MODE_LPM;
++
++	/* The DSI host must be in LP-11 before the init sequence (stock lp11-init). */
++	ctx->panel.prepare_prev_first = true;
++
++	ctx->bl = devm_backlight_device_register(dev, dev_name(dev), dev, ctx, &mojito_k7_bl_ops,
++						 &props);
++	if (IS_ERR(ctx->bl))
++		return dev_err_probe(dev, PTR_ERR(ctx->bl), "failed to register the backlight\n");
++	ctx->panel.backlight = ctx->bl;
++
++	drm_panel_add(&ctx->panel);
++
++	ret = devm_mipi_dsi_attach(dev, dsi);
++	if (ret < 0) {
++		drm_panel_remove(&ctx->panel);
++		return dev_err_probe(dev, ret, "failed to attach to the DSI host\n");
++	}
++
++	return 0;
++}
++
++static void mojito_k7_remove(struct mipi_dsi_device *dsi)
++{
++	struct mojito_k7 *ctx = mipi_dsi_get_drvdata(dsi);
++
++	drm_panel_remove(&ctx->panel);
++}
++
++static const struct of_device_id mojito_k7_of_match[] = {
++	{ .compatible = "xiaomi,mojito-k7-panel" },
++	{ /* sentinel */ }
++};
++MODULE_DEVICE_TABLE(of, mojito_k7_of_match);
++
++static struct mipi_dsi_driver mojito_k7_driver = {
++	.probe = mojito_k7_probe,
++	.remove = mojito_k7_remove,
++	.driver = {
++		.name = "panel-xiaomi-mojito-k7",
++		.of_match_table = mojito_k7_of_match,
++	},
++};
++module_mipi_dsi_driver(mojito_k7_driver);
++
++MODULE_DESCRIPTION("Xiaomi Redmi Note 10 (mojito) k7 AMOLED DSI panel driver");
++MODULE_LICENSE("GPL");
+diff --git a/drivers/iio/adc/qcom-spmi-adc5.c b/drivers/iio/adc/qcom-spmi-adc5.c
+index 83ecd3adf..426ca110d 100644
+--- a/drivers/iio/adc/qcom-spmi-adc5.c
++++ b/drivers/iio/adc/qcom-spmi-adc5.c
+@@ -544,6 +544,8 @@ static const struct adc5_channels adc5_chans_pmic[ADC5_MAX_CHANNEL] = {
+ 					SCALE_HW_CALIB_XOTHERM)
+ 	[ADC5_BAT_ID_100K_PU]	= ADC5_CHAN_TEMP("bat_id", 0,
+ 					SCALE_HW_CALIB_DEFAULT)
++	[ADC5_BAT_THERM_100K_PU] = ADC5_CHAN_TEMP("bat_therm_100k_pu", 0,
++					SCALE_HW_CALIB_THERM_100K_PULLUP)
+ 	[ADC5_AMUX_THM1_100K_PU] = ADC5_CHAN_TEMP("amux_thm1_100k_pu", 0,
+ 					SCALE_HW_CALIB_THERM_100K_PULLUP)
+ 	[ADC5_AMUX_THM2_100K_PU] = ADC5_CHAN_TEMP("amux_thm2_100k_pu", 0,
+diff --git a/drivers/input/touchscreen/edt-ft5x06.c b/drivers/input/touchscreen/edt-ft5x06.c
+index d6c3d033b..7a4e49a33 100644
+--- a/drivers/input/touchscreen/edt-ft5x06.c
++++ b/drivers/input/touchscreen/edt-ft5x06.c
+@@ -1460,7 +1460,12 @@ static const struct edt_i2c_chip_data edt_ft3518_data = {
+ };
+ 
+ static const struct edt_i2c_chip_data edt_ft5452_data = {
+-	.max_support_points = 5,
++	/*
++	 * The Redmi Note 10 panel's FT5452 keeps reporting a stale contact and
++	 * never releases it unless the whole 10-point frame (63 bytes) is read,
++	 * as the vendor driver does.
++	 */
++	.max_support_points = 10,
+ };
+ 
+ static const struct edt_i2c_chip_data edt_ft5506_data = {
+diff --git a/drivers/interconnect/qcom/qcs615.c b/drivers/interconnect/qcom/qcs615.c
+index 017a60174..1c8cc087c 100644
+--- a/drivers/interconnect/qcom/qcs615.c
++++ b/drivers/interconnect/qcom/qcs615.c
+@@ -1195,6 +1195,7 @@ static struct qcom_icc_node xs_sys_tcu_cfg = {
+ 
+ static struct qcom_icc_bcm bcm_acv = {
+ 	.name = "ACV",
++	.enable_mask = 0x8,
+ 	.num_nodes = 1,
+ 	.nodes = { &ebi },
+ };
+diff --git a/drivers/iommu/arm/arm-smmu/arm-smmu-qcom.c b/drivers/iommu/arm/arm-smmu/arm-smmu-qcom.c
+index e2c914fcc..b93b18a93 100644
+--- a/drivers/iommu/arm/arm-smmu/arm-smmu-qcom.c
++++ b/drivers/iommu/arm/arm-smmu/arm-smmu-qcom.c
+@@ -421,6 +421,7 @@ static const struct of_device_id qcom_smmu_client_of_match[] __maybe_unused = {
+ 	{ .compatible = "qcom,sdm845-mdss" },
+ 	{ .compatible = "qcom,sdm845-mss-pil" },
+ 	{ .compatible = "qcom,sm6115-mdss" },
++	{ .compatible = "qcom,sm6150-mdss" },
+ 	{ .compatible = "qcom,sm6350-mdss" },
+ 	{ .compatible = "qcom,sm6375-mdss" },
+ 	{ .compatible = "qcom,sm8150-mdss" },
+@@ -513,6 +514,18 @@ static int qcom_smmu_cfg_probe(struct arm_smmu_device *smmu)
+ 		}
+ 	}
+ 
++	/*
++	 * violet (sm6150/talos): the hypervisor keeps context banks 10-12 for its own streams and
++	 * silently ignores S2CR writes that point a Linux stream at them (the stream stays FAULT),
++	 * which is what stopped the ADSP audio stream 0x1721 from ever translating.  Hide them.
++	 */
++	if (of_device_is_compatible(smmu->dev->of_node, "qcom,qcs615-smmu-500") &&
++	    smmu->num_context_banks > 12) {
++		set_bit(10, smmu->context_map);
++		set_bit(11, smmu->context_map);
++		set_bit(12, smmu->context_map);
++	}
++
+ 	for (i = 0; i < smmu->num_mapping_groups; i++) {
+ 		smr = arm_smmu_gr0_read(smmu, ARM_SMMU_GR0_SMR(i));
+ 
+diff --git a/drivers/pmdomain/qcom/rpmhpd.c b/drivers/pmdomain/qcom/rpmhpd.c
+index 63120e703..15eb7dc73 100644
+--- a/drivers/pmdomain/qcom/rpmhpd.c
++++ b/drivers/pmdomain/qcom/rpmhpd.c
+@@ -877,6 +877,14 @@ static const struct rpmhpd_desc qcs8300_desc = {
+ static struct rpmhpd *qcs615_rpmhpds[] = {
+ 	[RPMHPD_CX] = &cx,
+ 	[RPMHPD_CX_AO] = &cx_ao,
++	/*
++	 * The modem (mpss) votes on the MSS rail: qcom_q6v5_pas's
++	 * mpss_resource_init attaches proxy power domains "cx" and "mss", and
++	 * without this entry qcom_pas_pds_attach() fails with -ENODATA, which
++	 * is what has kept mpss - and therefore the WLAN firmware bootstrap -
++	 * off on violet.
++	 */
++	[RPMHPD_MSS] = &mss,
+ };
+ 
+ static const struct rpmhpd_desc qcs615_desc = {
+diff --git a/drivers/power/supply/Kconfig b/drivers/power/supply/Kconfig
+index f0ede1cec..48a4ad128 100644
+--- a/drivers/power/supply/Kconfig
++++ b/drivers/power/supply/Kconfig
+@@ -1165,6 +1165,24 @@ config CHARGER_QCOM_SMB2
+ 	  adds support for the SMB2 switch mode battery charger found
+ 	  in PMI8998 and related PMICs.
+ 
++config BATTERY_QCOM_QG_LITE
++	tristate "Qualcomm QGauge battery monitor (read-only)"
++	depends on MFD_SPMI_PMIC
++	depends on IIO
++	help
++	  Battery voltage, current and an estimated state of charge from the
++	  QGauge (QG) block in PM6150-class PMICs, which the bootloader leaves
++	  running. The driver only reads the hardware. The state of charge is
++	  coulomb counted and corrected toward the battery's OCV table.
++
++config CHARGER_QCOM_SMB5
++	tristate "Qualcomm SMB5 PMIC charger driver (PM8150B, PM6150)"
++	depends on MFD_SPMI_PMIC
++	depends on IIO
++	help
++	  Say Y here to enable the Qualcomm SMB5 switch mode battery charger
++	  found in PM8150B and related PMICs. Out-of-tree port, not upstream.
++
+ config FUEL_GAUGE_MM8013
+ 	tristate "Mitsumi MM8013 fuel gauge driver"
+ 	depends on I2C
+diff --git a/drivers/power/supply/Makefile b/drivers/power/supply/Makefile
+index 31fe4a145..1ea0cd610 100644
+--- a/drivers/power/supply/Makefile
++++ b/drivers/power/supply/Makefile
+@@ -133,3 +133,5 @@ obj-$(CONFIG_CHARGER_QCOM_SMB2)	+= qcom_smbx.o
+ obj-$(CONFIG_FUEL_GAUGE_MM8013)	+= mm8013.o
+ obj-$(CONFIG_MACSMC_POWER)	+= macsmc-power.o
+ obj-$(CONFIG_CHARGER_MAX77759)	+= max77759_charger.o
++obj-$(CONFIG_CHARGER_QCOM_SMB5)	+= qcom_pm8150b_charger.o
++obj-$(CONFIG_BATTERY_QCOM_QG_LITE)	+= qcom_qg_lite.o
+diff --git a/drivers/power/supply/power_supply_sysfs.c b/drivers/power/supply/power_supply_sysfs.c
+index f30a7b9cc..02bca4967 100644
+--- a/drivers/power/supply/power_supply_sysfs.c
++++ b/drivers/power/supply/power_supply_sysfs.c
+@@ -227,6 +227,7 @@ static struct power_supply_attr power_supply_attrs[] __ro_after_init = {
+ 	POWER_SUPPLY_ATTR(MANUFACTURE_DAY),
+ 	POWER_SUPPLY_ATTR(INTERNAL_RESISTANCE),
+ 	POWER_SUPPLY_ATTR(STATE_OF_HEALTH),
++	POWER_SUPPLY_ATTR(CHARGING_ENABLED),
+ 	/* Properties of type `const char *' */
+ 	POWER_SUPPLY_ATTR(MODEL_NAME),
+ 	POWER_SUPPLY_ATTR(MANUFACTURER),
+diff --git a/drivers/power/supply/qcom_pm8150b_charger.c b/drivers/power/supply/qcom_pm8150b_charger.c
+new file mode 100644
+index 000000000..d51d69d8f
+--- /dev/null
++++ b/drivers/power/supply/qcom_pm8150b_charger.c
+@@ -0,0 +1,1032 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Copyright (c) 2024, Teguh Sobirin <teguh@sobir.in>.
++ *
++ * This driver is for the switch-mode battery charger power delivery
++ * and boost hardware found in pm8150b and related PMICs.
++ * Ported from the postmarketOS xiaomi-pipa kernel package (patch 0002); the float-voltage fix is from its patch 0018,
++ * WITHOUT that patch's change that disables charging at probe.
++ * This work based on pmi8998 charger driver by
++ * Caleb Connolly <caleb.connolly@linaro.org>
++ * Should be merged with the existing charger driver in the future.
++ */
++
++#include <linux/bits.h>
++#include <linux/devm-helpers.h>
++#include <linux/iio/consumer.h>
++#include <linux/interrupt.h>
++#include <linux/kernel.h>
++#include <linux/minmax.h>
++#include <linux/module.h>
++#include <linux/platform_device.h>
++#include <linux/pm_wakeirq.h>
++#include <linux/of.h>
++#include <linux/power_supply.h>
++#include <linux/regmap.h>
++#include <linux/types.h>
++#include <linux/workqueue.h>
++
++/* clang-format off */
++#define BATTERY_CHARGER_STATUS_1			0x06
++#define ICL_INCR_REQ_FOR_PRECHG_BIT			BIT(7)
++#define ZERO_CHARGE_CURRENT_BIT				BIT(6)
++#define STEP_CHARGING_STATUS_SHIFT			3
++#define STEP_CHARGING_STATUS_MASK			GENMASK(5, 3)
++#define BATTERY_CHARGER_STATUS_MASK			GENMASK(2, 0)
++
++#define BATTERY_CHARGER_STATUS_2			0x07
++#define DROP_IN_BATTERY_VOLTAGE_REFERENCE_BIT		BIT(7)
++#define VBATT_LTET_RECHARGE_BIT				BIT(6)
++#define VBATT_GTET_INHIBIT_BIT				BIT(5)
++#define VBATT_GTET_FLOAT_VOLTAGE_BIT			BIT(4)
++#define BATT_GT_FULL_ON_BIT				BIT(3)
++#define CHARGER_ERROR_STATUS_SFT_EXPIRE_BIT		BIT(2)
++#define CHARGER_ERROR_STATUS_BAT_OV_BIT			BIT(1)
++#define CHARGER_ERROR_STATUS_BAT_TERM_MISSING_BIT	BIT(0)
++
++#define BATTERY_CHARGER_STATUS_4		0x0A
++#define CHARGE_CURRENT_REFERENCE_MASK		GENMASK(7, 0)
++
++#define BATTERY_CHARGER_STATUS_7_REG		0x0D
++#define BAT_TEMP_STATUS_SOFT_LIMIT_MASK		GENMASK(5, 4)
++#define BAT_TEMP_STATUS_HOT_SOFT_BIT		BIT(5)
++#define BAT_TEMP_STATUS_COLD_SOFT_BIT		BIT(4)
++#define BAT_TEMP_STATUS_HARD_LIMIT_MASK		GENMASK(3, 2)
++#define BAT_TEMP_STATUS_TOO_HOT_BIT		BIT(3)
++#define BAT_TEMP_STATUS_TOO_COLD_BIT		BIT(2)
++#define BAT_TEMP_STATUS_TOO_HOT_AFP_BIT		BIT(1)
++#define BAT_TEMP_STATUS_TOO_COLD_AFP_BIT	BIT(0)
++
++#define CHARGING_ENABLE_CMD			0x42
++#define CHARGING_ENABLE_CMD_BIT			BIT(0)
++#define CHARGING_ENABLE_POF_BIT			BIT(1)
++
++#define CHGR_CFG2				0x51
++#define EN_FAVOR_IN_BIT				BIT(5)
++#define BAT_OV_ECC_BIT				BIT(4)
++#define I_TERM_BIT				BIT(3)
++#define AUTO_RECHG_BIT				BIT(2)
++#define SOC_BASED_RECHG_BIT			BIT(1)
++#define CHARGER_INHIBIT_BIT			BIT(0)
++
++#define PRE_CHARGE_CURRENT_CFG			0x60
++#define PRE_CHARGE_CURRENT_SETTING_MASK		GENMASK(2, 0)
++
++#define FAST_CHARGE_CURRENT_CFG			0x61
++#define FAST_CHARGE_CURRENT_SETTING_MASK	GENMASK(7, 0)
++
++#define FLOAT_VOLTAGE_CFG			0x70
++#define FLOAT_VOLTAGE_SETTING_MASK		GENMASK(7, 0)
++
++#define CHARGE_RCHG_SOC_THRESHOLD_CFG_REG	0x7D
++#define CHARGE_RCHG_SOC_THRESHOLD_CFG_MASK	GENMASK(7, 0)
++
++#define ICL_STATUS				0x107
++#define ICL_INPUT_CURRENT_LIMIT_MASK		GENMASK(7, 0)
++
++#define AICL_STATUS				0x108
++#define AICL_INPUT_CURRENT_LIMIT_MASK		GENMASK(7, 0)
++
++#define POWER_PATH_STATUS				0x10B
++#define P_PATH_INPUT_SS_DONE_BIT			BIT(7)
++#define P_PATH_USBIN_SUSPEND_STS_BIT			BIT(6)
++#define P_PATH_DCIN_SUSPEND_STS_BIT			BIT(5)
++#define P_PATH_USE_USBIN_BIT				BIT(4)
++#define P_PATH_USE_DCIN_BIT				BIT(3)
++#define P_PATH_POWER_PATH_MASK				GENMASK(2, 1)
++#define P_PATH_VALID_INPUT_POWER_SOURCE_STS_BIT		BIT(0)
++
++#define OTG_CFG					0x153
++#define OTG_RESERVED_BIT			BIT(7)
++#define FAST_ROLE_SWAP_START_OPTION_BIT		BIT(6)
++#define DIS_OTG_ON_TSD_BIT			BIT(5)
++#define OTG_CFG_4_BIT				BIT(4)
++#define EN_SOC_BASED_OTG_UVLO_BIT		BIT(3)
++#define ENABLE_OTG_IN_DEBUG_MODE_BIT		BIT(2)
++#define OTG_EN_SRC_CFG_BIT			BIT(1)
++#define OTG_HICCUP_CNTR_RST_TIMER_SEL_BIT	BIT(0)
++
++#define APSD_STATUS				0x307
++#define APSD_STATUS_7_BIT			BIT(7)
++#define HVDCP_CHECK_TIMEOUT_BIT			BIT(6)
++#define SLOW_PLUGIN_TIMEOUT_BIT			BIT(5)
++#define ENUMERATION_DONE_BIT			BIT(4)
++#define VADP_CHANGE_DONE_AFTER_AUTH_BIT		BIT(3)
++#define QC_AUTH_DONE_STATUS_BIT			BIT(2)
++#define QC_CHARGER_BIT				BIT(1)
++#define APSD_DTC_STATUS_DONE_BIT		BIT(0)
++
++#define APSD_RESULT_STATUS			0x308
++#define APSD_RESULT_STATUS_7_BIT		BIT(7)
++#define APSD_RESULT_STATUS_MASK			GENMASK(6, 0)
++#define QC_3P0_BIT				BIT(6)
++#define QC_2P0_BIT				BIT(5)
++#define FLOAT_CHARGER_BIT			BIT(4)
++#define DCP_CHARGER_BIT				BIT(3)
++#define CDP_CHARGER_BIT				BIT(2)
++#define OCP_CHARGER_BIT				BIT(1)
++#define SDP_CHARGER_BIT				BIT(0)
++
++#define USBIN_INT_RT_STS_OFFSET			0x310
++#define USBIN_PLUGIN_RT_STS_BIT			BIT(4)
++
++#define AICL_CMD				0x644
++#define RERUN_AICL_BIT				BIT(0)
++#define USBIN_CMD_IL				0x340
++#define USBIN_SUSPEND_BIT			BIT(0)
++
++#define CMD_APSD				0x341
++#define APSD_RERUN_BIT				BIT(0)
++
++#define CMD_ICL_OVERRIDE			0x342
++#define ICL_OVERRIDE_BIT			BIT(0)
++
++#define TYPE_C_CFG				0x358
++#define BC1P2_START_ON_CC_BIT			BIT(7)
++
++#define HVDCP_PULSE_COUNT_MAX			0x35b
++#define HVDCP_PULSE_COUNT_MAX_QC2_MASK		GENMASK(7, 6)
++
++#define USBIN_ADAPTER_ALLOW_CFG			0x360
++#define USBIN_ADAPTER_ALLOW_MASK		GENMASK(3, 0)
++
++#define USBIN_OPTIONS_1_CFG			0x362
++#define USBIN_OPTIONS_2_CFG			0x363
++#define FORCE_FLOAT_SDP_CFG_BIT			BIT(0)
++#define HVDCP_AUTH_ALG_EN_CFG_BIT		BIT(6)
++#define HVDCP_AUTONOMOUS_MODE_EN_CFG_BIT	BIT(5)
++#define BC1P2_SRC_DETECT_BIT			BIT(3)
++#define HVDCP_EN_BIT				BIT(2)
++#define HVDCP_NO_AUTH_QC3_CFG_BIT		BIT(1)
++
++#define USBIN_LOAD_CFG				0x365
++#define ICL_OVERRIDE_AFTER_APSD_BIT		BIT(4)
++#define USBIN_AICL_STEP_TIMING_SEL_MASK		GENMASK(3, 2)
++#define USBIN_IN_COLLAPSE_GF_SEL_MASK		GENMASK(1, 0)
++
++#define USBIN_ICL_OPTIONS			0x366
++#define CFG_USB3P0_SEL_BIT			BIT(2)
++#define USB51_MODE_BIT				BIT(1)
++#define USBIN_MODE_CHG_BIT			BIT(0)
++
++#define USBIN_CURRENT_LIMIT_CFG			0x370
++#define USBIN_CURRENT_LIMIT_MASK		GENMASK(7, 0)
++
++#define USBIN_AICL_OPTIONS_CFG			0x380
++#define SUSPEND_ON_COLLAPSE_USBIN_BIT		BIT(7)
++#define USBIN_AICL_PERIODIC_RERUN_EN_BIT	BIT(4)
++#define USBIN_AICL_ADC_EN_BIT			BIT(3)
++#define USBIN_AICL_EN_BIT			BIT(2)
++
++#define USBIN_5V_AICL_THRESHOLD_CFG		0x381
++#define USBIN_5V_AICL_THRESHOLD_CFG_MASK	GENMASK(2, 0)
++
++#define USBIN_CONT_AICL_THRESHOLD_CFG		0x384
++#define USBIN_CONT_AICL_THRESHOLD_CFG_MASK	GENMASK(5, 0)
++
++#define DCIN_CMD_IL				0x440
++#define DCIN_SUSPEND_BIT			BIT(0)
++
++#define TYPE_C_SNK_STATUS			0x506
++#define DETECTED_SRC_TYPE_MASK			GENMASK(6, 0)
++#define SNK_RP_STD_DAM_BIT			BIT(6)
++#define SNK_RP_1P5_DAM_BIT			BIT(5)
++#define SNK_RP_3P0_DAM_BIT			BIT(4)
++#define SNK_DAM_MASK				GENMASK(6, 4)
++#define SNK_DAM_500MA_BIT			BIT(6)
++#define SNK_DAM_1500MA_BIT			BIT(5)
++#define SNK_DAM_3000MA_BIT			BIT(4)
++#define SNK_RP_STD_BIT				BIT(3)
++#define SNK_RP_1P5_BIT				BIT(2)
++#define SNK_RP_3P0_BIT				BIT(1)
++#define SNK_RP_SHORT_BIT			BIT(0)
++
++#define TYPE_C_MODE_CFG				0x544
++#define TYPEC_TRY_MODE_MASK			GENMASK(4, 3)
++#define EN_TRY_SNK_BIT				BIT(4)
++#define EN_TRY_SRC_BIT				BIT(3)
++#define TYPEC_POWER_ROLE_CMD_MASK		GENMASK(2, 0)
++#define EN_SRC_ONLY_BIT				BIT(2)
++#define EN_SNK_ONLY_BIT				BIT(1)
++#define TYPEC_DISABLE_CMD_BIT			BIT(0)
++
++#define TYPEC_TYPE_C_VCONN_CONTROL		0x546
++#define VCONN_EN_ORIENTATION_BIT		BIT(2)
++#define VCONN_EN_VALUE_BIT			BIT(1)
++#define VCONN_EN_SRC_BIT			BIT(0)
++
++#define TYPE_C_DEBUG_ACCESS_SINK		0x54a
++#define TYPEC_DEBUG_ACCESS_SINK_MASK		GENMASK(4, 0)
++
++#define DEBUG_ACCESS_SRC_CFG			0x54C
++#define EN_UNORIENTED_DEBUG_ACCESS_SRC_BIT	BIT(0)
++
++#define TYPE_C_EXIT_STATE_CFG			0x550
++#define BYPASS_VSAFE0V_DURING_ROLE_SWAP_BIT	BIT(3)
++#define SEL_SRC_UPPER_REF_BIT			BIT(2)
++#define EXIT_SNK_BASED_ON_CC_BIT		BIT(0)
++
++#define TYPE_C_INTERRUPT_EN_CFG_1			0x55e
++#define TYPEC_LEGACY_CABLE_INT_EN_BIT			BIT(7)
++#define TYPEC_NONCOMPLIANT_LEGACY_CABLE_INT_EN_BIT	BIT(6)
++#define TYPEC_TRYSOURCE_DETECT_INT_EN_BIT		BIT(5)
++#define TYPEC_TRYSINK_DETECT_INT_EN_BIT			BIT(4)
++#define TYPEC_CCOUT_DETACH_INT_EN_BIT			BIT(3)
++#define TYPEC_CCOUT_ATTACH_INT_EN_BIT			BIT(2)
++#define TYPEC_VBUS_DEASSERT_INT_EN_BIT			BIT(1)
++#define TYPEC_VBUS_ASSERT_INT_EN_BIT			BIT(0)
++
++#define BARK_BITE_WDOG_PET			0x643
++#define BARK_BITE_WDOG_PET_BIT			BIT(0)
++
++#define WD_CFG					0x651
++#define WATCHDOG_TRIGGER_AFP_EN_BIT		BIT(7)
++#define BARK_WDOG_INT_EN_BIT			BIT(6)
++#define BITE_WDOG_INT_EN_BIT			BIT(5)
++#define SFT_AFTER_WDOG_IRQ_MASK			GENMASK(4, 3)
++#define WDOG_IRQ_SFT_BIT			BIT(2)
++#define WDOG_TIMER_EN_ON_PLUGIN_BIT		BIT(1)
++#define WDOG_TIMER_EN_BIT			BIT(0)
++
++#define SNARL_BARK_BITE_WD_CFG			0x653
++#define BITE_WDOG_DISABLE_CHARGING_CFG_BIT	BIT(7)
++#define SNARL_WDOG_TIMEOUT_MASK			GENMASK(6, 4)
++#define BARK_WDOG_TIMEOUT_MASK			GENMASK(3, 2)
++#define BITE_WDOG_TIMEOUT_MASK			GENMASK(1, 0)
++
++#define AICL_RERUN_TIME_CFG			0x661
++#define AICL_RERUN_TIME_MASK			GENMASK(1, 0)
++
++#define SDP_CURRENT_UA			500000
++#define CDP_CURRENT_UA			1500000
++#define DCP_CURRENT_UA			2000000
++#define CURRENT_MAX_UA			3000000	/* stock qcom,usb-icl-ua */
++
++/* the SMB5 registers represent current in increments of 50 mA */
++#define CURRENT_SCALE_FACTOR		50000
++
++/* float voltage: 3.6 V + n * 10 mV, up to 4.79 V (same table as the vendor driver) */
++#define FLOAT_VOLTAGE_MIN_UV		3600000
++#define FLOAT_VOLTAGE_MAX_UV		4790000
++#define FLOAT_VOLTAGE_STEP_UV		10000
++/* clang-format on */
++
++enum charger_status {
++	TRICKLE_CHARGE = 0,
++	PRE_CHARGE,
++	FAST_CHARGE,
++	FULLON_CHARGE,
++	TAPER_CHARGE,
++	TERMINATE_CHARGE,
++	INHIBIT_CHARGE,
++	DISABLE_CHARGE,
++};
++
++struct smb5_register {
++	u16 addr;
++	u8 mask;
++	u8 val;
++};
++
++/**
++ * struct smb5_chip - smb5 chip structure
++ * @dev:		Device reference for power_supply
++ * @name:		The platform device name
++ * @base:		Base address for smb5 registers
++ * @regmap:		Register map
++ * @batt_info:		Battery data from DT
++ * @status_change_work: Worker to handle plug/unplug events
++ * @cable_irq:		USB plugin IRQ
++ * @wakeup_enabled:	If the cable IRQ will cause a wakeup
++ * @usb_in_i_chan:	USB_IN current measurement channel
++ * @usb_in_v_chan:	USB_IN voltage measurement channel
++ * @chg_psy:		Charger power supply instance
++ */
++struct smb5_chip {
++	struct device *dev;
++	const char *name;
++	unsigned int base;
++	struct regmap *regmap;
++	struct power_supply_battery_info *batt_info;
++
++	struct delayed_work status_change_work;
++	int cable_irq;
++	bool wakeup_enabled;
++
++	struct iio_channel *usb_in_i_chan;
++	struct iio_channel *usb_in_v_chan;
++
++	struct power_supply *chg_psy;
++};
++
++static enum power_supply_property smb5_properties[] = {
++	POWER_SUPPLY_PROP_MANUFACTURER,
++	POWER_SUPPLY_PROP_MODEL_NAME,
++	POWER_SUPPLY_PROP_CURRENT_MAX,
++	POWER_SUPPLY_PROP_CURRENT_NOW,
++	POWER_SUPPLY_PROP_VOLTAGE_NOW,
++	POWER_SUPPLY_PROP_STATUS,
++	POWER_SUPPLY_PROP_HEALTH,
++	POWER_SUPPLY_PROP_ONLINE,
++	POWER_SUPPLY_PROP_USB_TYPE,
++	POWER_SUPPLY_PROP_CHARGING_ENABLED,
++};
++
++static int smb5_get_prop_usb_online(struct smb5_chip *chip, int *val)
++{
++	unsigned int stat;
++	int rc;
++
++	rc = regmap_read(chip->regmap, chip->base + USBIN_INT_RT_STS_OFFSET, &stat);
++	if (rc < 0) {
++		dev_err(chip->dev, "Couldn't read USBIN_RT_STS rc=%d\n", rc);
++		return rc;
++	}
++
++	*val = (stat & USBIN_PLUGIN_RT_STS_BIT) ? 1 : 0;
++	return 0;
++}
++
++/*
++ * Qualcomm "automatic power source detection" aka APSD
++ * tells us what type of charger we're connected to.
++ */
++static int smb5_apsd_get_charger_type(struct smb5_chip *chip, int *val)
++{
++	unsigned int apsd_stat, stat;
++	int usb_online = 0;
++	int rc;
++
++	rc = smb5_get_prop_usb_online(chip, &usb_online);
++	if (!usb_online) {
++		*val = POWER_SUPPLY_USB_TYPE_UNKNOWN;
++		return rc;
++	}
++
++	rc = regmap_read(chip->regmap, chip->base + APSD_STATUS, &apsd_stat);
++	if (rc < 0) {
++		dev_err(chip->dev, "Failed to read apsd status, rc = %d", rc);
++		return rc;
++	}
++	if (!(apsd_stat & APSD_DTC_STATUS_DONE_BIT)) {
++		dev_err(chip->dev, "Apsd not ready");
++		return -EAGAIN;
++	}
++
++	rc = regmap_read(chip->regmap, chip->base + APSD_RESULT_STATUS, &stat);
++	if (rc < 0) {
++		dev_err(chip->dev, "Failed to read apsd result, rc = %d", rc);
++		return rc;
++	}
++
++	stat &= APSD_RESULT_STATUS_MASK;
++
++	if (stat & CDP_CHARGER_BIT){
++		*val = POWER_SUPPLY_USB_TYPE_CDP;
++	} else if (stat & DCP_CHARGER_BIT){
++		*val = POWER_SUPPLY_USB_TYPE_DCP;
++	} else if (stat & OCP_CHARGER_BIT){
++		*val = POWER_SUPPLY_USB_TYPE_DCP;
++	} else if (stat & FLOAT_CHARGER_BIT){
++		/* data lines not recognised: usually an SDP detected too early */
++		*val = POWER_SUPPLY_USB_TYPE_SDP;
++	} else if (stat & QC_2P0_BIT){
++		*val = POWER_SUPPLY_USB_TYPE_DCP;
++	} else if (stat & QC_3P0_BIT){
++		*val = POWER_SUPPLY_USB_TYPE_DCP;
++	} else {
++		*val = POWER_SUPPLY_USB_TYPE_SDP;
++	}
++
++	return 0;
++}
++
++static int smb5_get_prop_charging_enabled(struct smb5_chip *chip, int *val)
++{
++	unsigned int charging_enabled;
++	int rc = regmap_read(chip->regmap, chip->base + CHARGING_ENABLE_CMD, &charging_enabled);
++	if (rc < 0) {
++		dev_err(chip->dev, "Failed to read charging enabled status, rc = %d", rc);
++		return rc;
++	}
++	*val = charging_enabled & CHARGING_ENABLE_CMD_BIT ? 1 : 0;
++	return 0;
++}
++
++static int smb5_get_prop_status(struct smb5_chip *chip, int *val)
++{
++	unsigned char stat[2];
++	int usb_online = 0;
++	int rc;
++
++	rc = smb5_get_prop_usb_online(chip, &usb_online);
++	if (!usb_online) {
++		*val = POWER_SUPPLY_STATUS_DISCHARGING;
++		return rc;
++	}
++
++	rc = regmap_bulk_read(chip->regmap,
++			      chip->base + BATTERY_CHARGER_STATUS_1, &stat, 2);
++	if (rc < 0) {
++		dev_err(chip->dev, "Failed to read charging status ret=%d\n",
++			rc);
++		return rc;
++	}
++
++	/*
++	 * The charge state comes first: near full VBATT_GTET_INHIBIT is set
++	 * while the charger is still in taper and current flows into the
++	 * battery, so it must not turn an active charge into "not charging".
++	 */
++	stat[0] = stat[0] & BATTERY_CHARGER_STATUS_MASK;
++
++	switch (stat[0]) {
++	case TRICKLE_CHARGE:
++	case PRE_CHARGE:
++	case FAST_CHARGE:
++	case FULLON_CHARGE:
++	case TAPER_CHARGE:
++		*val = POWER_SUPPLY_STATUS_CHARGING;
++		return rc;
++	case DISABLE_CHARGE:
++		*val = POWER_SUPPLY_STATUS_NOT_CHARGING;
++		return rc;
++	case TERMINATE_CHARGE:
++	case INHIBIT_CHARGE:
++		*val = POWER_SUPPLY_STATUS_FULL;
++		return rc;
++	default:
++		*val = POWER_SUPPLY_STATUS_UNKNOWN;
++		return rc;
++	}
++}
++
++static inline int smb5_get_current_limit(struct smb5_chip *chip,
++					 unsigned int *val)
++{
++	int rc = regmap_read(chip->regmap, chip->base + AICL_STATUS, val);
++
++	if (rc >= 0)
++		*val *= CURRENT_SCALE_FACTOR;
++	return rc;
++}
++
++static int smb5_set_current_limit(struct smb5_chip *chip, unsigned int val)
++{
++	unsigned char val_raw;
++	int rc;
++
++	if (val > CURRENT_MAX_UA) {
++		dev_err(chip->dev,
++			"Can't set current limit higher than %d uA", CURRENT_MAX_UA);
++		return -EINVAL;
++	}
++	val_raw = val / CURRENT_SCALE_FACTOR;
++
++	rc = regmap_write(chip->regmap, chip->base + USBIN_CURRENT_LIMIT_CFG,
++			  val_raw);
++	if (rc)
++		return rc;
++
++	/*
++	 * The limit register only applies in high-current mode with the ICL
++	 * taken over after APSD (the vendor's SW_OVERRIDE_HC_MODE). In the
++	 * hardware-automatic mode left by the init sequence an SDP port gets
++	 * the 100 mA USB default and this register is ignored.
++	 */
++	rc = regmap_update_bits(chip->regmap, chip->base + USBIN_ICL_OPTIONS,
++				USBIN_MODE_CHG_BIT, USBIN_MODE_CHG_BIT);
++	if (rc)
++		return rc;
++	rc = regmap_update_bits(chip->regmap, chip->base + CMD_ICL_OVERRIDE,
++				ICL_OVERRIDE_BIT, 0);
++	if (rc)
++		return rc;
++	return regmap_update_bits(chip->regmap, chip->base + USBIN_LOAD_CFG,
++				  ICL_OVERRIDE_AFTER_APSD_BIT,
++				  ICL_OVERRIDE_AFTER_APSD_BIT);
++}
++
++static int smb5_set_prop_charging_enabled(struct smb5_chip *chip, unsigned int val)
++{
++	return regmap_update_bits(chip->regmap, chip->base + CHARGING_ENABLE_CMD,
++					CHARGING_ENABLE_CMD_BIT, val ? CHARGING_ENABLE_CMD_BIT : 0);
++}
++
++/*
++ * SDP (and FLOAT, which is usually an SDP): USB 2.0 500 mA in USB51 mode, as
++ * the vendor's set_sdp_current(). In high-current mode the hardware holds an
++ * SDP to the 100 mA USB default. Unlike the vendor code the ICL override is
++ * left clear: on PM6150 (Redmi Note 10) setting it here suspends USBIN
++ * (POWER_PATH_STATUS bit 6) until the input is re-armed. The input is then
++ * unsuspended and AICL re-run, which also recovers such a latched suspend.
++ */
++static int smb5_set_sdp_current(struct smb5_chip *chip, bool is_float)
++{
++	int rc;
++
++	if (is_float) {
++		rc = regmap_update_bits(chip->regmap, chip->base + USBIN_OPTIONS_2_CFG,
++					FORCE_FLOAT_SDP_CFG_BIT, FORCE_FLOAT_SDP_CFG_BIT);
++		if (rc)
++			return rc;
++	}
++	rc = regmap_update_bits(chip->regmap, chip->base + USBIN_ICL_OPTIONS,
++				CFG_USB3P0_SEL_BIT | USB51_MODE_BIT | USBIN_MODE_CHG_BIT,
++				USB51_MODE_BIT);
++	if (rc)
++		return rc;
++	rc = regmap_update_bits(chip->regmap, chip->base + CMD_ICL_OVERRIDE,
++				ICL_OVERRIDE_BIT, 0);
++	if (rc)
++		return rc;
++	rc = regmap_update_bits(chip->regmap, chip->base + USBIN_LOAD_CFG,
++				ICL_OVERRIDE_AFTER_APSD_BIT, 0);
++	if (rc)
++		return rc;
++	rc = regmap_update_bits(chip->regmap, chip->base + USBIN_CMD_IL,
++				USBIN_SUSPEND_BIT, 0);
++	if (rc)
++		return rc;
++	return regmap_write(chip->regmap, chip->base + AICL_CMD, RERUN_AICL_BIT);
++}
++
++static void smb5_status_change_work(struct work_struct *work)
++{
++	unsigned int charger_type, current_ua;
++	int usb_online = 0;
++	int count, rc;
++	struct smb5_chip *chip;
++
++	chip = container_of(work, struct smb5_chip, status_change_work.work);
++
++	smb5_get_prop_usb_online(chip, &usb_online);
++	if (!usb_online)
++		return;
++
++	for (count = 0; count < 3; count++) {
++		dev_dbg(chip->dev, "get charger type retry %d\n", count);
++		rc = smb5_apsd_get_charger_type(chip, &charger_type);
++		if (rc != -EAGAIN)
++			break;
++		msleep(100);
++	}
++
++	if (rc < 0 && rc != -EAGAIN) {
++		dev_err(chip->dev, "get charger type failed: %d\n", rc);
++		return;
++	}
++
++	if (rc < 0) {
++		rc = regmap_update_bits(chip->regmap, chip->base + CMD_APSD,
++					APSD_RERUN_BIT, APSD_RERUN_BIT);
++		schedule_delayed_work(&chip->status_change_work,
++				      msecs_to_jiffies(1000));
++		dev_dbg(chip->dev, "get charger type failed, rerun apsd\n");
++		return;
++	}
++
++	switch (charger_type) {
++	case POWER_SUPPLY_USB_TYPE_CDP:
++		current_ua = CDP_CURRENT_UA;
++		break;
++	case POWER_SUPPLY_USB_TYPE_DCP:
++		current_ua = DCP_CURRENT_UA;
++		break;
++	case POWER_SUPPLY_USB_TYPE_SDP:
++	default:
++		regmap_read(chip->regmap, chip->base + APSD_RESULT_STATUS, &current_ua);
++		smb5_set_sdp_current(chip, current_ua & FLOAT_CHARGER_BIT);
++		power_supply_changed(chip->chg_psy);
++		return;
++	}
++
++	smb5_set_current_limit(chip, current_ua);
++	power_supply_changed(chip->chg_psy);
++}
++
++static int smb5_get_iio_chan(struct smb5_chip *chip, struct iio_channel *chan,
++			     int *val)
++{
++	int rc;
++	union power_supply_propval status;
++
++	rc = power_supply_get_property(chip->chg_psy, POWER_SUPPLY_PROP_STATUS,
++				       &status);
++	if (rc < 0 || status.intval != POWER_SUPPLY_STATUS_CHARGING) {
++		*val = 0;
++		return 0;
++	}
++
++	if (IS_ERR(chan)) {
++		dev_err(chip->dev, "Failed to chan, err = %li", PTR_ERR(chan));
++		return PTR_ERR(chan);
++	}
++
++	return iio_read_channel_processed(chan, val);
++}
++
++static int smb5_get_prop_health(struct smb5_chip *chip, int *val)
++{
++	int rc;
++	unsigned int stat;
++
++	rc = regmap_read(chip->regmap, chip->base + BATTERY_CHARGER_STATUS_2,
++			 &stat);
++	if (rc < 0) {
++		dev_err(chip->dev, "Couldn't read charger status rc=%d\n", rc);
++		return rc;
++	}
++
++	if (stat & CHARGER_ERROR_STATUS_BAT_OV_BIT) {
++		dev_err(chip->dev, "battery over-voltage");
++	}
++
++	rc = regmap_read(chip->regmap, chip->base + BATTERY_CHARGER_STATUS_7_REG,
++			 &stat);
++	if (rc < 0) {
++		dev_err(chip->dev, "Couldn't read charger status 7 rc=%d\n", rc);
++		return rc;
++	}
++
++	if (stat & BAT_TEMP_STATUS_TOO_COLD_BIT)
++		*val = POWER_SUPPLY_HEALTH_COLD;
++	else if (stat & BAT_TEMP_STATUS_TOO_HOT_BIT)
++		*val = POWER_SUPPLY_HEALTH_OVERHEAT;
++	else if (stat & BAT_TEMP_STATUS_COLD_SOFT_BIT)
++		*val = POWER_SUPPLY_HEALTH_COOL;
++	else if (stat & BAT_TEMP_STATUS_HOT_SOFT_BIT)
++		*val = POWER_SUPPLY_HEALTH_WARM;
++	else
++		*val = POWER_SUPPLY_HEALTH_GOOD;
++
++	return 0;
++}
++
++static int smb5_get_property(struct power_supply *psy,
++			     enum power_supply_property psp,
++			     union power_supply_propval *val)
++{
++	struct smb5_chip *chip = power_supply_get_drvdata(psy);
++
++	switch (psp) {
++	case POWER_SUPPLY_PROP_MANUFACTURER:
++		val->strval = "Qualcomm";
++		return 0;
++	case POWER_SUPPLY_PROP_MODEL_NAME:
++		val->strval = chip->name;
++		return 0;
++	case POWER_SUPPLY_PROP_CURRENT_MAX:
++		return smb5_get_current_limit(chip, &val->intval);
++	case POWER_SUPPLY_PROP_CURRENT_NOW:
++		return smb5_get_iio_chan(chip, chip->usb_in_i_chan,
++					 &val->intval);
++	case POWER_SUPPLY_PROP_VOLTAGE_NOW:
++		return smb5_get_iio_chan(chip, chip->usb_in_v_chan,
++					 &val->intval);
++	case POWER_SUPPLY_PROP_ONLINE:
++		return smb5_get_prop_usb_online(chip, &val->intval);
++	case POWER_SUPPLY_PROP_STATUS:
++		return smb5_get_prop_status(chip, &val->intval);
++	case POWER_SUPPLY_PROP_HEALTH:
++		return smb5_get_prop_health(chip, &val->intval);
++	case POWER_SUPPLY_PROP_USB_TYPE:
++		return smb5_apsd_get_charger_type(chip, &val->intval);
++	case POWER_SUPPLY_PROP_CHARGING_ENABLED:
++		return smb5_get_prop_charging_enabled(chip, &val->intval);
++	default:
++		dev_err(chip->dev, "invalid property: %d\n", psp);
++		return -EINVAL;
++	}
++}
++
++static int smb5_set_property(struct power_supply *psy,
++			     enum power_supply_property psp,
++			     const union power_supply_propval *val)
++{
++	struct smb5_chip *chip = power_supply_get_drvdata(psy);
++
++	switch (psp) {
++	case POWER_SUPPLY_PROP_CURRENT_MAX:
++		return smb5_set_current_limit(chip, val->intval);
++	case POWER_SUPPLY_PROP_CHARGING_ENABLED:
++		return smb5_set_prop_charging_enabled(chip, val->intval);
++	default:
++		dev_err(chip->dev, "No setter for property: %d\n", psp);
++		return -EINVAL;
++	}
++}
++
++static int smb5_property_is_writable(struct power_supply *psy,
++				     enum power_supply_property psp)
++{
++	switch (psp) {
++	case POWER_SUPPLY_PROP_CURRENT_MAX:
++	case POWER_SUPPLY_PROP_CHARGING_ENABLED:
++		return 1;
++	default:
++		return 0;
++	}
++}
++
++static irqreturn_t smb5_handle_batt_overvoltage(int irq, void *data)
++{
++	struct smb5_chip *chip = data;
++	unsigned int status;
++
++	regmap_read(chip->regmap, chip->base + BATTERY_CHARGER_STATUS_2,
++		    &status);
++
++	if (status & CHARGER_ERROR_STATUS_BAT_OV_BIT) {
++		/* The hardware stops charging automatically */
++		dev_err(chip->dev, "battery overvoltage detected\n");
++		power_supply_changed(chip->chg_psy);
++	}
++
++	return IRQ_HANDLED;
++}
++
++static irqreturn_t smb5_handle_usb_plugin(int irq, void *data)
++{
++	struct smb5_chip *chip = data;
++
++	power_supply_changed(chip->chg_psy);
++
++	schedule_delayed_work(&chip->status_change_work,
++			      msecs_to_jiffies(1500));
++
++	return IRQ_HANDLED;
++}
++
++static irqreturn_t smb5_handle_usb_icl_change(int irq, void *data)
++{
++	struct smb5_chip *chip = data;
++
++	power_supply_changed(chip->chg_psy);
++
++	return IRQ_HANDLED;
++}
++
++static irqreturn_t smb5_handle_wdog_bark(int irq, void *data)
++{
++	struct smb5_chip *chip = data;
++	int rc;
++
++	power_supply_changed(chip->chg_psy);
++
++	rc = regmap_write(chip->regmap, chip->base + BARK_BITE_WDOG_PET,
++			  BARK_BITE_WDOG_PET_BIT);
++	if (rc < 0)
++		dev_err(chip->dev, "Couldn't pet the dog rc=%d\n", rc);
++
++	return IRQ_HANDLED;
++}
++
++static const struct power_supply_desc smb5_psy_desc = {
++	.name = "pm8150b_charger",
++	.type = POWER_SUPPLY_TYPE_USB,
++	.usb_types = BIT(POWER_SUPPLY_USB_TYPE_SDP) |
++		     BIT(POWER_SUPPLY_USB_TYPE_CDP) |
++		     BIT(POWER_SUPPLY_USB_TYPE_DCP) |
++		     BIT(POWER_SUPPLY_USB_TYPE_UNKNOWN),
++	.properties = smb5_properties,
++	.num_properties = ARRAY_SIZE(smb5_properties),
++	.get_property = smb5_get_property,
++	.set_property = smb5_set_property,
++	.property_is_writeable = smb5_property_is_writable,
++};
++
++/* Init sequence derived from vendor downstream driver */
++static const struct smb5_register smb5_init_seq[] = {
++	{ .addr = USBIN_CMD_IL, .mask = USBIN_SUSPEND_BIT, .val = 0 },
++	{ .addr = AICL_RERUN_TIME_CFG, .mask = AICL_RERUN_TIME_MASK, .val = 0 },
++	/*
++	 * Type-C (0x15xx) and OTG registers are deliberately left as the
++	 * bootloader set them: rewriting them can drop the USB link, which on
++	 * phones like the Redmi Note 10 is the only connection to the host.
++	 */
++	/*
++	 * Use VBAT to determine the recharge threshold when battery is full
++	 * rather than the state of charge.
++	 */
++	{ .addr = CHARGE_RCHG_SOC_THRESHOLD_CFG_REG,
++	  .mask = CHARGE_RCHG_SOC_THRESHOLD_CFG_MASK,
++	  .val = 98 },
++	/* Enable charging */
++	{ .addr = CHARGING_ENABLE_CMD,
++	  .mask = CHARGING_ENABLE_CMD_BIT,
++	  .val = CHARGING_ENABLE_CMD_BIT },
++	/* Enable BC1P2 Src detect */
++	{ .addr = USBIN_OPTIONS_1_CFG,
++	  .mask = BC1P2_SRC_DETECT_BIT,
++	  .val = BC1P2_SRC_DETECT_BIT },
++	/* Set the default SDP charger type to a 500ma USB 2.0 port */
++	{ .addr = USBIN_ICL_OPTIONS,
++	  .mask = USBIN_MODE_CHG_BIT,
++	  .val = USBIN_MODE_CHG_BIT },
++	{ .addr = CMD_ICL_OVERRIDE,
++	  .mask = ICL_OVERRIDE_BIT,
++	  .val = 0 },
++	{ .addr = USBIN_LOAD_CFG,
++	  .mask = ICL_OVERRIDE_AFTER_APSD_BIT,
++	  .val = 0 },
++	/* Disable watchdog */
++	{ .addr = SNARL_BARK_BITE_WD_CFG, .mask = 0xff, .val = 0 },
++	{ .addr = WD_CFG,
++	  .mask = WATCHDOG_TRIGGER_AFP_EN_BIT | WDOG_TIMER_EN_ON_PLUGIN_BIT |
++		  BARK_WDOG_INT_EN_BIT | WDOG_TIMER_EN_BIT,
++	  .val = 0 },
++	/*
++	 * Enable Automatic Input Current Limit, this will slowly ramp up the current
++	 * When connected to a wall charger, and automatically stop when it detects
++	 * the charger current limit (voltage drop?) or it reaches the programmed limit.
++	 */
++	{ .addr = USBIN_AICL_OPTIONS_CFG,
++	  .mask = USBIN_AICL_PERIODIC_RERUN_EN_BIT | USBIN_AICL_ADC_EN_BIT
++			| USBIN_AICL_EN_BIT | SUSPEND_ON_COLLAPSE_USBIN_BIT,
++	  .val = USBIN_AICL_PERIODIC_RERUN_EN_BIT | USBIN_AICL_ADC_EN_BIT
++			| USBIN_AICL_EN_BIT | SUSPEND_ON_COLLAPSE_USBIN_BIT },
++};
++
++static int smb5_init_hw(struct smb5_chip *chip)
++{
++	int rc, i;
++	for (i = 0; i < ARRAY_SIZE(smb5_init_seq); i++) {
++		dev_dbg(chip->dev, "%d: Writing 0x%02x to 0x%02x\n", i,
++			smb5_init_seq[i].val, smb5_init_seq[i].addr);
++		rc = regmap_update_bits(chip->regmap,
++					chip->base + smb5_init_seq[i].addr,
++					smb5_init_seq[i].mask,
++					smb5_init_seq[i].val);
++		if (rc < 0)
++			return dev_err_probe(chip->dev, rc,
++					     "%s: init command %d failed\n",
++					     __func__, i);
++	}
++	return 0;
++}
++
++static int smb5_init_irq(struct smb5_chip *chip, int *irq, const char *name,
++			 irqreturn_t (*handler)(int irq, void *data))
++{
++	int irqnum;
++	int rc;
++
++	irqnum = platform_get_irq_byname(to_platform_device(chip->dev), name);
++	if (irqnum < 0)
++		return irqnum;
++
++	rc = devm_request_threaded_irq(chip->dev, irqnum, NULL, handler,
++				       IRQF_ONESHOT, name, chip);
++	if (rc < 0)
++		return dev_err_probe(chip->dev, rc, "Couldn't request irq %s\n",
++				     name);
++
++	if (irq)
++		*irq = irqnum;
++
++	return 0;
++}
++
++static int smb5_probe(struct platform_device *pdev)
++{
++	struct power_supply_config supply_config = {};
++	struct power_supply_desc *desc;
++	struct smb5_chip *chip;
++	int rc, irq, float_voltage_uv;
++
++	chip = devm_kzalloc(&pdev->dev, sizeof(*chip), GFP_KERNEL);
++	if (!chip)
++		return -ENOMEM;
++
++	chip->dev = &pdev->dev;
++	chip->name = pdev->name;
++
++	chip->regmap = dev_get_regmap(pdev->dev.parent, NULL);
++	if (!chip->regmap)
++		return dev_err_probe(chip->dev, -ENODEV,
++				     "failed to locate the regmap\n");
++
++	rc = device_property_read_u32(chip->dev, "reg", &chip->base);
++	if (rc < 0)
++		return dev_err_probe(chip->dev, rc,
++				     "Couldn't read base address\n");
++
++	chip->usb_in_v_chan = devm_iio_channel_get(chip->dev, "usb_in_v_div_16");
++	if (IS_ERR(chip->usb_in_v_chan))
++		return dev_err_probe(chip->dev, PTR_ERR(chip->usb_in_v_chan),
++				     "Couldn't get usb_in_v_div_16 IIO channel\n");
++
++	chip->usb_in_i_chan = devm_iio_channel_get(chip->dev, "usb_in_i_uv");
++	if (IS_ERR(chip->usb_in_i_chan)) {
++		return dev_err_probe(chip->dev, PTR_ERR(chip->usb_in_i_chan),
++				     "Couldn't get usb_in_i_uv IIO channel\n");
++	}
++
++	rc = smb5_init_hw(chip);
++	if (rc < 0)
++		return rc;
++
++	supply_config.drv_data = chip;
++	supply_config.fwnode = pdev->dev.fwnode;
++
++	desc = devm_kzalloc(chip->dev, sizeof(smb5_psy_desc), GFP_KERNEL);
++	if (!desc)
++		return -ENOMEM;
++	memcpy(desc, &smb5_psy_desc, sizeof(smb5_psy_desc));
++	desc->name =
++		devm_kasprintf(chip->dev, GFP_KERNEL, "%s-charger",
++			       (const char *)device_get_match_data(chip->dev));
++	if (!desc->name)
++		return -ENOMEM;
++
++	chip->chg_psy =
++		devm_power_supply_register(chip->dev, desc, &supply_config);
++	if (IS_ERR(chip->chg_psy))
++		return dev_err_probe(chip->dev, PTR_ERR(chip->chg_psy),
++				     "failed to register power supply\n");
++
++	rc = power_supply_get_battery_info(chip->chg_psy, &chip->batt_info);
++	if (rc)
++		return dev_err_probe(chip->dev, rc,
++				     "Failed to get battery info\n");
++
++	rc = devm_delayed_work_autocancel(chip->dev, &chip->status_change_work,
++					  smb5_status_change_work);
++	if (rc)
++		return dev_err_probe(chip->dev, rc,
++				     "Failed to init status change work\n");
++
++	float_voltage_uv = chip->batt_info->voltage_max_design_uv;
++	if (float_voltage_uv < FLOAT_VOLTAGE_MIN_UV || float_voltage_uv > FLOAT_VOLTAGE_MAX_UV)
++		return dev_err_probe(chip->dev, -EINVAL,
++				     "Requested voltage %d uV outside valid range [%d, %d] uV\n",
++				     float_voltage_uv, FLOAT_VOLTAGE_MIN_UV, FLOAT_VOLTAGE_MAX_UV);
++	rc = (float_voltage_uv - FLOAT_VOLTAGE_MIN_UV) / FLOAT_VOLTAGE_STEP_UV;
++	rc = regmap_update_bits(chip->regmap, chip->base + FLOAT_VOLTAGE_CFG,
++				FLOAT_VOLTAGE_SETTING_MASK, rc);
++	if (rc < 0)
++		return dev_err_probe(chip->dev, rc, "Couldn't set vbat max\n");
++
++	/* fast-charge current from the battery node, 50 mA steps, at most 3 A */
++	if (chip->batt_info->constant_charge_current_max_ua > 0) {
++		unsigned int fcc = min(chip->batt_info->constant_charge_current_max_ua,
++				       3000000);
++
++		rc = regmap_update_bits(chip->regmap,
++					chip->base + FAST_CHARGE_CURRENT_CFG,
++					FAST_CHARGE_CURRENT_SETTING_MASK,
++					fcc / CURRENT_SCALE_FACTOR);
++		if (rc < 0)
++			return dev_err_probe(chip->dev, rc, "Couldn't set fcc\n");
++	}
++
++	rc = smb5_init_irq(chip, &irq, "bat-ov", smb5_handle_batt_overvoltage);
++	if (rc < 0)
++		return rc;
++
++	rc = smb5_init_irq(chip, &chip->cable_irq, "usbin-plugin",
++			   smb5_handle_usb_plugin);
++	if (rc < 0)
++		return rc;
++
++	rc = smb5_init_irq(chip, &irq, "usbin-icl-change",
++			   smb5_handle_usb_icl_change);
++	if (rc < 0)
++		return rc;
++	rc = smb5_init_irq(chip, &irq, "wdog-bark", smb5_handle_wdog_bark);
++	if (rc < 0)
++		return rc;
++
++	rc = devm_pm_set_wake_irq(chip->dev, chip->cable_irq);
++	if (rc < 0)
++		return dev_err_probe(chip->dev, rc, "Couldn't set wake irq\n");
++
++	platform_set_drvdata(pdev, chip);
++
++	/* Initialise charger state */
++	schedule_delayed_work(&chip->status_change_work, 0);
++
++	return 0;
++}
++
++static const struct of_device_id smb5_match_id_table[] = {
++	{ .compatible = "qcom,pm8150b-charger", .data = "pm8150b" },
++	{ /* sentinal */ }
++};
++MODULE_DEVICE_TABLE(of, smb5_match_id_table);
++
++static struct platform_driver qcom_spmi_smb5 = {
++	.probe = smb5_probe,
++	.driver = {
++		.name = "qcom-pm8150b-charger",
++		.of_match_table = smb5_match_id_table,
++		},
++};
++
++module_platform_driver(qcom_spmi_smb5);
++
++MODULE_AUTHOR("Caleb Connolly <caleb.connolly@linaro.org>");
++MODULE_DESCRIPTION("Qualcomm SMB5 Charger Driver");
++MODULE_IMPORT_NS("IIO_CONSUMER");
++MODULE_LICENSE("GPL");
+diff --git a/drivers/power/supply/qcom_qg_lite.c b/drivers/power/supply/qcom_qg_lite.c
+new file mode 100644
+index 000000000..796bda1ad
+--- /dev/null
++++ b/drivers/power/supply/qcom_qg_lite.c
+@@ -0,0 +1,537 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Minimal, read-only battery driver for the Qualcomm QGauge (QG) block found in
++ * PM6150/PM7150B/PMI632-class PMICs.
++ *
++ * It does not program the QG: the bootloader (XBL) leaves it running and
++ * measuring, and this driver only reads the battery voltage and current it
++ * reports. The only write is the reported SOC into the QG SDAM byte the
++ * vendor driver also keeps it in, so the next boot starts from it. The state of charge is started from the value the previous OS left
++ * in the QG SDAM (or from the OCV table if that is missing), followed by
++ * coulomb counting, and slowly pulled toward the OCV-table estimate
++ * (voltage + I x R) whenever the current is low. Battery data (OCV tables,
++ * design capacity, internal resistance) comes from a "simple-battery" node.
++ *
++ * Register layout and scaling follow the vendor driver (qg-reg.h, qg-util.c).
++ */
++
++#include <linux/bitfield.h>
++#include <linux/devm-helpers.h>
++#include <linux/iio/consumer.h>
++#include <linux/math64.h>
++#include <linux/minmax.h>
++#include <linux/module.h>
++#include <linux/mutex.h>
++#include <linux/of.h>
++#include <linux/platform_device.h>
++#include <linux/power_supply.h>
++#include <linux/regmap.h>
++#include <linux/workqueue.h>
++
++#define QG_PERPH_SUBTYPE		0x05
++#define QG_SUBTYPE_IBAT_5A		0x03
++#define QG_STATUS1			0x08
++#define  QG_STATUS1_OK			BIT(7)
++#define  QG_STATUS1_BATT_PRESENT	BIT(0)
++#define QG_LAST_ADC_V			0xc0
++#define QG_LAST_BURST_AVG_I		0xc6
++
++#define SDAM_VALID			0x46
++#define SDAM_SOC			0x47
++#define SDAM_LEARNED_CAP		0x68	/* 2 bytes, mAh */
++
++#define QG_POLL_MS			5000
++#define QG_V_UV_PER_LSB_X1000		194637ULL
++#define QG_I_UA_PER_LSB_X1000_5A	152588LL
++#define QG_I_UA_PER_LSB_X1000_10A	305176LL
++#define QG_DEFAULT_RBAT_UOHM		150000
++#define QG_REST_CURRENT_UA		100000
++#define QG_DIR_CURRENT_UA		20000
++#define QG_STATUS_CURRENT_UA		50000
++#define QG_USBIN_ONLINE_UV		4000000
++
++struct qg_lite {
++	struct device *dev;
++	struct regmap *regmap;
++	u32 base;
++	u32 sdam_base;
++	bool has_sdam;
++	s64 i_scale;
++
++	struct power_supply *psy;
++	struct power_supply_battery_info *info;
++	struct iio_channel *temp_chan;
++	struct iio_channel *usbin_chan;
++	struct power_supply *chg_psy;	/* "power-supplies" charger, looked up lazily */
++	bool no_chg_psy;
++	struct delayed_work work;
++	struct mutex lock;
++	int learned_uah;	/* from SDAM, 0 if unusable */
++
++	/* state, protected by lock */
++	bool ready;
++	int vbat_uv;
++	int ibat_ua;		/* QG convention: positive = discharging */
++	int temp_dc;		/* tenths of a degree C */
++	int ocv_uv;
++	s64 charge_nah;		/* coulomb counter */
++	int soc_x100;		/* internal SOC, 0..10000 */
++	int soc_reported;	/* 0..100, the value userspace sees */
++	int status;
++	int status_cand;
++	ktime_t last;
++};
++
++static int qg_read_u16(struct qg_lite *qg, u32 reg, u16 *val)
++{
++	u8 buf[2];
++	int ret;
++
++	ret = regmap_bulk_read(qg->regmap, qg->base + reg, buf, 2);
++	if (ret)
++		return ret;
++	*val = buf[0] | (buf[1] << 8);
++	return 0;
++}
++
++static int qg_read_vi(struct qg_lite *qg, int *v_uv, int *i_ua)
++{
++	u16 raw;
++	int ret;
++
++	ret = qg_read_u16(qg, QG_LAST_ADC_V, &raw);
++	if (ret)
++		return ret;
++	*v_uv = div_u64(QG_V_UV_PER_LSB_X1000 * raw, 1000);
++
++	ret = qg_read_u16(qg, QG_LAST_BURST_AVG_I, &raw);
++	if (ret)
++		return ret;
++	*i_ua = div_s64(qg->i_scale * sign_extend32(raw, 15), 1000);
++	return 0;
++}
++
++static int qg_temp_dc(struct qg_lite *qg)
++{
++	int mdeg;
++
++	if (qg->temp_chan && !iio_read_channel_processed(qg->temp_chan, &mdeg))
++		return mdeg / 100;
++	return 250;
++}
++
++static int qg_usbin_online(struct qg_lite *qg)
++{
++	int uv;
++
++	if (!qg->usbin_chan || iio_read_channel_processed(qg->usbin_chan, &uv))
++		return -ENODATA;
++	return uv > QG_USBIN_ONLINE_UV;
++}
++
++static int qg_design_uah(struct qg_lite *qg)
++{
++	return qg->info->charge_full_design_uah > 0 ?
++	       qg->info->charge_full_design_uah : 5000000;
++}
++
++static int qg_full_uah(struct qg_lite *qg)
++{
++	return qg->learned_uah ? qg->learned_uah : qg_design_uah(qg);
++}
++
++/* capacity the previous OS learned; trusted only between 50 % and 110 % of design */
++static void qg_read_learned(struct qg_lite *qg)
++{
++	u8 buf[2];
++	int uah;
++
++	if (!qg->has_sdam ||
++	    regmap_bulk_read(qg->regmap, qg->sdam_base + SDAM_LEARNED_CAP, buf, 2))
++		return;
++	uah = (buf[0] | (buf[1] << 8)) * 1000;
++	if (uah >= qg_design_uah(qg) / 2 && uah <= qg_design_uah(qg) * 11 / 10)
++		qg->learned_uah = uah;
++}
++
++static int qg_ocv_soc_x100(struct qg_lite *qg, int v_uv, int i_ua, int temp_dc)
++{
++	int rbat = qg->info->factory_internal_resistance_uohm > 0 ?
++		   qg->info->factory_internal_resistance_uohm : QG_DEFAULT_RBAT_UOHM;
++	int cap;
++
++	qg->ocv_uv = v_uv + (int)div_s64((s64)i_ua * rbat, 1000000);
++	cap = power_supply_batinfo_ocv2cap(qg->info, qg->ocv_uv, temp_dc / 10);
++	if (cap < 0)
++		return -EINVAL;
++	return clamp(cap, 0, 100) * 100;
++}
++
++/*
++ * With a charger described by "power-supplies", its status is used while it is
++ * online: it comes from the charger's state machine (pre/fast/taper charge,
++ * terminated, inhibited), which does not flip when the phone's load briefly
++ * exceeds a weak input limit and the battery current changes sign.
++ */
++static int qg_charger_status(struct qg_lite *qg)
++{
++	union power_supply_propval val;
++
++	if (!qg->chg_psy && !qg->no_chg_psy) {
++		struct power_supply *psy =
++			devm_power_supply_get_by_reference(qg->dev, "power-supplies");
++
++		if (IS_ERR(psy))
++			qg->no_chg_psy = true;	/* not described: no charger lookup */
++		else
++			qg->chg_psy = psy;	/* NULL: not registered yet, retry */
++	}
++	if (!qg->chg_psy)
++		return -ENODEV;
++
++	if (power_supply_get_property(qg->chg_psy, POWER_SUPPLY_PROP_ONLINE, &val))
++		return -EIO;
++	if (!val.intval)
++		return POWER_SUPPLY_STATUS_DISCHARGING;
++	if (power_supply_get_property(qg->chg_psy, POWER_SUPPLY_PROP_STATUS, &val))
++		return -EIO;
++	if (val.intval == POWER_SUPPLY_STATUS_NOT_CHARGING && qg->soc_reported >= 99)
++		return POWER_SUPPLY_STATUS_FULL;
++	if (val.intval == POWER_SUPPLY_STATUS_UNKNOWN ||
++	    val.intval == POWER_SUPPLY_STATUS_DISCHARGING)
++		return -EIO;
++	return val.intval;
++}
++
++/*
++ * Without a charger driver: guess from the current. Near full on USB the
++ * charger tapers or inhibits and the battery current wanders around zero in
++ * both directions, so "full" tolerates +-200 mA.
++ */
++static int qg_status_now(struct qg_lite *qg)
++{
++	int online, i = qg->ibat_ua;
++	int chg = qg_charger_status(qg);
++
++	if (chg >= 0)
++		return chg;
++
++	online = qg_usbin_online(qg);
++
++	if (online > 0 && qg->soc_reported >= 99 && abs(i) <= 200000)
++		return POWER_SUPPLY_STATUS_FULL;
++	if (i < -QG_STATUS_CURRENT_UA)
++		return POWER_SUPPLY_STATUS_CHARGING;
++	if (i > QG_STATUS_CURRENT_UA || online <= 0)
++		return POWER_SUPPLY_STATUS_DISCHARGING;
++	return POWER_SUPPLY_STATUS_NOT_CHARGING;
++}
++
++/* a new status must be seen on two polls in a row before it is reported */
++static int qg_status(struct qg_lite *qg)
++{
++	int now = qg_status_now(qg);
++
++	if (now == qg->status || now == qg->status_cand) {
++		qg->status_cand = now;
++		return now;
++	}
++	qg->status_cand = now;
++	return qg->status;
++}
++
++static void qg_update(struct qg_lite *qg)
++{
++	int v, i, ocv_soc, target, old_soc, old_status, full = qg_full_uah(qg);
++	ktime_t now = ktime_get_boottime();
++	s64 dt_ms;
++
++	if (qg_read_vi(qg, &v, &i))
++		return;
++
++	mutex_lock(&qg->lock);
++	old_soc = qg->soc_reported;
++	old_status = qg->status;
++
++	dt_ms = ktime_ms_delta(now, qg->last);
++	qg->last = now;
++	qg->vbat_uv = v;
++	qg->ibat_ua = i;
++	qg->temp_dc = qg_temp_dc(qg);
++
++	/* coulomb counting: nAh = uA * ms / 3600 */
++	qg->charge_nah -= div_s64((s64)i * dt_ms, 3600);
++	qg->charge_nah = clamp_t(s64, qg->charge_nah, 0, (s64)full * 1000);
++	qg->soc_x100 = div_s64(qg->charge_nah * 10, full);
++
++	/* pull toward the OCV estimate, strongly only when it is trustworthy */
++	ocv_soc = qg_ocv_soc_x100(qg, v, i, qg->temp_dc);
++	if (ocv_soc >= 0) {
++		int div = abs(i) < QG_REST_CURRENT_UA ? 20 : 200;
++
++		qg->soc_x100 += (ocv_soc - qg->soc_x100) / div;
++	}
++
++	/* end points */
++	if (i < 0 && abs(i) < 150000 && qg_usbin_online(qg) > 0 &&
++	    v >= qg->info->voltage_max_design_uv - 30000 &&
++	    qg->info->voltage_max_design_uv > 0)
++		qg->soc_x100 = 10000;
++	if (qg->info->voltage_min_design_uv > 0 &&
++	    v < qg->info->voltage_min_design_uv)
++		qg->soc_x100 = 0;
++
++	qg->soc_x100 = clamp(qg->soc_x100, 0, 10000);
++	qg->charge_nah = div_s64((s64)qg->soc_x100 * full, 10);
++
++	/* reported value only moves in the direction the current flows */
++	target = DIV_ROUND_CLOSEST(qg->soc_x100, 100);
++	if (i > QG_DIR_CURRENT_UA)
++		target = min(target, qg->soc_reported);
++	else if (i < -QG_DIR_CURRENT_UA)
++		target = max(target, qg->soc_reported);
++	qg->soc_reported = target;
++	qg->status = qg_status(qg);
++	if (target != old_soc && qg->has_sdam)
++		regmap_write(qg->regmap, qg->sdam_base + SDAM_SOC, target);
++	mutex_unlock(&qg->lock);
++
++	if (target != old_soc || qg->status != old_status)
++		power_supply_changed(qg->psy);
++}
++
++static void qg_work(struct work_struct *work)
++{
++	struct qg_lite *qg = container_of(work, struct qg_lite, work.work);
++
++	qg_update(qg);
++	schedule_delayed_work(&qg->work, msecs_to_jiffies(QG_POLL_MS));
++}
++
++static void qg_init_soc(struct qg_lite *qg)
++{
++	int v, i, ocv_soc, soc = -1;
++	unsigned int valid = 0, sdam_soc = 0;
++
++	if (qg_read_vi(qg, &v, &i)) {
++		v = qg->info->voltage_max_design_uv;
++		i = 0;
++	}
++	qg->temp_dc = qg_temp_dc(qg);
++	ocv_soc = qg_ocv_soc_x100(qg, v, i, qg->temp_dc);
++
++	if (qg->has_sdam &&
++	    !regmap_read(qg->regmap, qg->sdam_base + SDAM_VALID, &valid) &&
++	    !regmap_read(qg->regmap, qg->sdam_base + SDAM_SOC, &sdam_soc) &&
++	    (valid & BIT(0)) && sdam_soc <= 100)
++		soc = sdam_soc * 100;
++
++	/* a stale saved value (the battery changed while off) loses to the OCV */
++	if (soc < 0 || (ocv_soc >= 0 && abs(soc - ocv_soc) > 1000))
++		soc = ocv_soc >= 0 ? ocv_soc : 5000;
++
++	dev_info(qg->dev, "vbat %d uV ibat %d uA, start SOC %d%% (sdam %s, ocv %d%%)\n",
++		 v, -i, soc / 100, soc == (int)sdam_soc * 100 ? "used" : "ignored",
++		 ocv_soc / 100);
++
++	qg->vbat_uv = v;
++	qg->ibat_ua = i;
++	qg->soc_x100 = soc;
++	qg->soc_reported = DIV_ROUND_CLOSEST(soc, 100);
++	qg->charge_nah = div_s64((s64)soc * qg_full_uah(qg), 10);
++	qg->last = ktime_get_boottime();
++	qg->status = qg_status_now(qg);
++	qg->status_cand = qg->status;
++	qg->ready = true;
++}
++
++static const enum power_supply_property qg_props[] = {
++	POWER_SUPPLY_PROP_STATUS,
++	POWER_SUPPLY_PROP_PRESENT,
++	POWER_SUPPLY_PROP_TECHNOLOGY,
++	POWER_SUPPLY_PROP_CAPACITY,
++	POWER_SUPPLY_PROP_VOLTAGE_NOW,
++	POWER_SUPPLY_PROP_VOLTAGE_OCV,
++	POWER_SUPPLY_PROP_CURRENT_NOW,
++	POWER_SUPPLY_PROP_TEMP,
++	POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN,
++	POWER_SUPPLY_PROP_CHARGE_FULL,
++	POWER_SUPPLY_PROP_CHARGE_NOW,
++	POWER_SUPPLY_PROP_VOLTAGE_MAX_DESIGN,
++	POWER_SUPPLY_PROP_VOLTAGE_MIN_DESIGN,
++};
++
++static int qg_get_property(struct power_supply *psy,
++			   enum power_supply_property psp,
++			   union power_supply_propval *val)
++{
++	struct qg_lite *qg = power_supply_get_drvdata(psy);
++	unsigned int sts;
++	int ret = 0;
++
++	if (psp == POWER_SUPPLY_PROP_PRESENT) {
++		ret = regmap_read(qg->regmap, qg->base + QG_STATUS1, &sts);
++		if (!ret)
++			val->intval = !!(sts & QG_STATUS1_BATT_PRESENT);
++		return ret;
++	}
++	if (psp == POWER_SUPPLY_PROP_TECHNOLOGY) {
++		val->intval = POWER_SUPPLY_TECHNOLOGY_LION;
++		return 0;
++	}
++
++	mutex_lock(&qg->lock);
++	if (!qg->ready) {
++		mutex_unlock(&qg->lock);
++		return -EAGAIN;
++	}
++
++	switch (psp) {
++	case POWER_SUPPLY_PROP_STATUS:
++		val->intval = qg->status;
++		break;
++	case POWER_SUPPLY_PROP_CAPACITY:
++		val->intval = qg->soc_reported;
++		break;
++	case POWER_SUPPLY_PROP_VOLTAGE_NOW:
++		val->intval = qg->vbat_uv;
++		break;
++	case POWER_SUPPLY_PROP_VOLTAGE_OCV:
++		val->intval = qg->ocv_uv;
++		break;
++	case POWER_SUPPLY_PROP_CURRENT_NOW:
++		/* power_supply ABI: negative while discharging */
++		val->intval = -qg->ibat_ua;
++		break;
++	case POWER_SUPPLY_PROP_TEMP:
++		val->intval = qg->temp_dc;
++		break;
++	case POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN:
++		val->intval = qg_design_uah(qg);
++		break;
++	case POWER_SUPPLY_PROP_CHARGE_FULL:
++		val->intval = qg_full_uah(qg);
++		break;
++	case POWER_SUPPLY_PROP_CHARGE_NOW:
++		val->intval = div_s64(qg->charge_nah, 1000);
++		break;
++	case POWER_SUPPLY_PROP_VOLTAGE_MAX_DESIGN:
++		val->intval = qg->info->voltage_max_design_uv;
++		break;
++	case POWER_SUPPLY_PROP_VOLTAGE_MIN_DESIGN:
++		val->intval = qg->info->voltage_min_design_uv;
++		break;
++	default:
++		ret = -EINVAL;
++	}
++	mutex_unlock(&qg->lock);
++	return ret;
++}
++
++static const struct power_supply_desc qg_desc = {
++	.name = "qcom-battery",
++	.type = POWER_SUPPLY_TYPE_BATTERY,
++	.properties = qg_props,
++	.num_properties = ARRAY_SIZE(qg_props),
++	.get_property = qg_get_property,
++};
++
++static struct iio_channel *qg_get_iio(struct device *dev, const char *name)
++{
++	struct iio_channel *chan = devm_iio_channel_get(dev, name);
++
++	if (IS_ERR(chan) && PTR_ERR(chan) != -EPROBE_DEFER)
++		return NULL;	/* optional */
++	return chan;
++}
++
++static int qg_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct power_supply_config cfg = {};
++	struct qg_lite *qg;
++	unsigned int subtype, sts;
++	u32 regs[2];
++	int ret, n;
++
++	qg = devm_kzalloc(dev, sizeof(*qg), GFP_KERNEL);
++	if (!qg)
++		return -ENOMEM;
++	qg->dev = dev;
++	mutex_init(&qg->lock);
++
++	qg->regmap = dev_get_regmap(dev->parent, NULL);
++	if (!qg->regmap)
++		return dev_err_probe(dev, -ENODEV, "no parent regmap\n");
++
++	n = of_property_count_u32_elems(dev->of_node, "reg");
++	if (n < 1 || of_property_read_u32_array(dev->of_node, "reg", regs, min(n, 2)))
++		return dev_err_probe(dev, -EINVAL, "bad reg property\n");
++	qg->base = regs[0];
++	if (n >= 2) {
++		qg->sdam_base = regs[1];
++		qg->has_sdam = true;
++	}
++
++	ret = regmap_read(qg->regmap, qg->base + QG_PERPH_SUBTYPE, &subtype);
++	if (ret)
++		return dev_err_probe(dev, ret, "cannot read subtype\n");
++	qg->i_scale = subtype == QG_SUBTYPE_IBAT_5A ? QG_I_UA_PER_LSB_X1000_5A :
++						      QG_I_UA_PER_LSB_X1000_10A;
++
++	ret = regmap_read(qg->regmap, qg->base + QG_STATUS1, &sts);
++	if (ret)
++		return ret;
++	if (!(sts & QG_STATUS1_OK))
++		dev_warn(dev, "QG not marked OK by the bootloader (status1 %#x)\n", sts);
++
++	qg->temp_chan = qg_get_iio(dev, "batt_therm");
++	if (IS_ERR(qg->temp_chan))
++		return PTR_ERR(qg->temp_chan);
++	qg->usbin_chan = qg_get_iio(dev, "usb_in_v");
++	if (IS_ERR(qg->usbin_chan))
++		return PTR_ERR(qg->usbin_chan);
++
++	cfg.drv_data = qg;
++	cfg.fwnode = dev_fwnode(dev);
++	qg->psy = devm_power_supply_register(dev, &qg_desc, &cfg);
++	if (IS_ERR(qg->psy))
++		return dev_err_probe(dev, PTR_ERR(qg->psy), "cannot register\n");
++
++	ret = power_supply_get_battery_info(qg->psy, &qg->info);
++	if (ret)
++		return dev_err_probe(dev, ret, "no monitored-battery info\n");
++	if (!qg->info->ocv_table[0])
++		return dev_err_probe(dev, -EINVAL, "monitored-battery has no OCV table\n");
++
++	mutex_lock(&qg->lock);
++	qg_read_learned(qg);
++	qg_init_soc(qg);
++	mutex_unlock(&qg->lock);
++	power_supply_changed(qg->psy);
++
++	ret = devm_delayed_work_autocancel(dev, &qg->work, qg_work);
++	if (ret)
++		return ret;
++	schedule_delayed_work(&qg->work, msecs_to_jiffies(QG_POLL_MS));
++	return 0;
++}
++
++static const struct of_device_id qg_of_match[] = {
++	{ .compatible = "qcom,pm6150-qg" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, qg_of_match);
++
++static struct platform_driver qg_driver = {
++	.probe = qg_probe,
++	.driver = {
++		.name = "qcom-qg-lite",
++		.of_match_table = qg_of_match,
++	},
++};
++module_platform_driver(qg_driver);
++
++MODULE_DESCRIPTION("Read-only Qualcomm QGauge battery driver");
++MODULE_IMPORT_NS("IIO_CONSUMER");
++MODULE_LICENSE("GPL");
+diff --git a/drivers/rpmsg/qcom_glink_native.c b/drivers/rpmsg/qcom_glink_native.c
+index fda1ddda0..2c0420c78 100644
+--- a/drivers/rpmsg/qcom_glink_native.c
++++ b/drivers/rpmsg/qcom_glink_native.c
+@@ -173,6 +173,16 @@ struct glink_channel {
+ 	char *name;
+ 	unsigned int lcid;
+ 	unsigned int rcid;
++	/*
++	 * Some firmware (violet: ADSP.VT.5.2, and its modem image) never acks
++	 * the reciprocal open mainline sends after acknowledging a
++	 * remote-initiated channel, yet still expects our TX_DATA addressed
++	 * with the cid it used in its own OPEN.  For those channels we keep
++	 * our own lcid allocated (separate cid space, no collisions) but put
++	 * the remote id in the packet header.
++	 */
++	bool tx_with_rcid;
++	bool intents_announced;
+ 
+ 	spinlock_t intent_lock;
+ 	struct idr liids;
+@@ -477,6 +487,11 @@ static void qcom_glink_intent_req_abort(struct glink_channel *channel)
+  *
+  * Return: 0 on success, negative errno otherwise.
+  */
++static inline unsigned int qcom_glink_tx_cid(struct glink_channel *channel)
++{
++	return channel->tx_with_rcid ? channel->rcid : channel->lcid;
++}
++
+ static int qcom_glink_send_open_req(struct qcom_glink *glink,
+ 				    struct glink_channel *channel)
+ {
+@@ -699,7 +714,7 @@ static int qcom_glink_send_intent_req_ack(struct qcom_glink *glink,
+ 						  granted);
+ 
+ 	msg.cmd = cpu_to_le16(GLINK_CMD_RX_INTENT_REQ_ACK);
+-	msg.param1 = cpu_to_le16(channel->lcid);
++	msg.param1 = cpu_to_le16(qcom_glink_tx_cid(channel));
+ 	msg.param2 = cpu_to_le32(granted);
+ 
+ 	qcom_glink_tx(glink, &msg, sizeof(msg), NULL, 0, true);
+@@ -730,7 +745,7 @@ static int qcom_glink_advertise_intent(struct qcom_glink *glink,
+ 	struct command cmd;
+ 
+ 	cmd.id = cpu_to_le16(GLINK_CMD_INTENT);
+-	cmd.lcid = cpu_to_le16(channel->lcid);
++	cmd.lcid = cpu_to_le16(qcom_glink_tx_cid(channel));
+ 	cmd.count = cpu_to_le32(1);
+ 	cmd.size = cpu_to_le32(intent->size);
+ 	cmd.liid = cpu_to_le32(intent->id);
+@@ -837,12 +852,17 @@ static void qcom_glink_handle_rx_done(struct qcom_glink *glink,
+  * The function searches for the local channel to which the request for
+  * rx_intent has arrived and allocates and notifies the remote back
+  */
++/* violet: runtime switch for the reuse check below (1 = downstream behaviour) */
++static bool violet_intent_req_reuse = true;
++module_param(violet_intent_req_reuse, bool, 0644);
++
+ static void qcom_glink_handle_intent_req(struct qcom_glink *glink,
+ 					 u32 cid, size_t size)
+ {
+ 	struct glink_core_rx_intent *intent;
+ 	struct glink_channel *channel;
+ 	unsigned long flags;
++	int iid;
+ 
+ 	spin_lock_irqsave(&glink->idr_lock, flags);
+ 	channel = idr_find(&glink->rcids, cid);
+@@ -857,6 +877,27 @@ static void qcom_glink_handle_intent_req(struct qcom_glink *glink,
+ 		return;
+ 	}
+ 
++	/*
++	 * violet: an already advertised reusable intent that is big enough
++	 * satisfies the request; ack it without advertising a new one, as the
++	 * downstream driver does.  The sm6150 ADSP (ADSP.VT.5.2) stops
++	 * servicing the whole edge when it gets a fresh INTENT in reply to its
++	 * RX_INTENT_REQ while it already holds large enough ones.
++	 */
++	intent = NULL;
++	if (violet_intent_req_reuse) {
++		spin_lock_irqsave(&channel->intent_lock, flags);
++		idr_for_each_entry(&channel->liids, intent, iid) {
++			if (intent->size >= size && intent->reuse)
++				break;
++		}
++		spin_unlock_irqrestore(&channel->intent_lock, flags);
++	}
++	if (intent) {
++		qcom_glink_send_intent_req_ack(glink, channel, true);
++		return;
++	}
++
+ 	intent = qcom_glink_alloc_intent(glink, channel, size, false);
+ 	if (intent)
+ 		qcom_glink_advertise_intent(glink, channel, intent);
+@@ -998,6 +1039,11 @@ static int qcom_glink_rx_data(struct qcom_glink *glink, size_t avail)
+ 					intent->offset,
+ 					channel->ept.priv,
+ 					RPMSG_ADDR_ANY);
++		} else {
++			/* violet: this drop used to be silent */
++			dev_err(glink->dev,
++				"violet: dropping %u B on %s (rcid %u): ept.cb is NULL\n",
++				intent->offset, channel->name, channel->rcid);
+ 		}
+ 		spin_unlock(&channel->recv_lock);
+ 
+@@ -1134,7 +1180,7 @@ static int qcom_glink_set_flow_control(struct rpmsg_endpoint *ept, bool pause, u
+ 		sigs |= NATIVE_DTR_SIG | NATIVE_RTS_SIG;
+ 
+ 	msg.cmd = cpu_to_le16(GLINK_CMD_SIGNALS);
+-	msg.param1 = cpu_to_le16(channel->lcid);
++	msg.param1 = cpu_to_le16(qcom_glink_tx_cid(channel));
+ 	msg.param2 = cpu_to_le32(sigs);
+ 
+ 	trace_qcom_glink_cmd_signal_tx(glink->label, channel->name,
+@@ -1298,8 +1344,23 @@ static int qcom_glink_create_remote(struct qcom_glink *glink,
+ 
+ 	ret = wait_for_completion_timeout(&channel->open_ack, 5 * HZ);
+ 	if (!ret) {
+-		ret = -ETIMEDOUT;
+-		goto close_link;
++		/*
++		 * This firmware opens the channel itself, we ack it, and then
++		 * it never acks our reciprocal open.  Upstream treats that as
++		 * fatal and tears the channel down (which is why IPCRTR could
++		 * never be brought up at all).  Aliasing our lcid to the
++		 * remote's made TX work but collided with the remote's own id
++		 * space and crashed the modem firmware within ~20 s.
++		 *
++		 * Keep our own lcid and just address TX with the remote's id:
++		 * the firmware uses the cid from its OPEN as the routing key
++		 * for our packets, and it ignores the separate lcid entirely.
++		 */
++		channel->tx_with_rcid = true;
++		dev_warn(glink->dev,
++			 "%s: no open_ack from remote, tx will use rcid %u\n",
++			 channel->name, channel->rcid);
++		return 0;
+ 	}
+ 
+ 	return 0;
+@@ -1316,6 +1377,9 @@ static int qcom_glink_create_remote(struct qcom_glink *glink,
+ 	return ret;
+ }
+ 
++static int qcom_glink_advertise_base_intents(struct glink_channel *channel,
++					     struct device_node *np);
++
+ static struct rpmsg_endpoint *qcom_glink_create_ept(struct rpmsg_device *rpdev,
+ 						    rpmsg_rx_cb_t cb,
+ 						    void *priv,
+@@ -1342,25 +1406,57 @@ static struct rpmsg_endpoint *qcom_glink_create_ept(struct rpmsg_device *rpdev,
+ 		channel = qcom_glink_create_local(glink, name);
+ 		if (IS_ERR(channel))
+ 			return NULL;
++
++		ept = &channel->ept;
++		ept->rpdev = rpdev;
++		ept->cb = cb;
++		ept->priv = priv;
++		ept->ops = &glink_endpoint_ops;
+ 	} else {
++		/*
++		 * violet: install the endpoint *before* the reciprocal OPEN.
++		 *
++		 * qcom_glink_create_remote() blocks for up to 5 s waiting for
++		 * the remote's OPEN_ACK.  Any data the remote sends inside that
++		 * window is copied into our intent, RX_DONE'd, and then dropped
++		 * silently, because channel->ept.cb is still NULL at that point
++		 * (see qcom_glink_rx_data, where the callback is only invoked
++		 * when ept.cb is non-NULL).
++		 * The sm6150 modem opens IPCRTR, immediately sends its single
++		 * 52-byte QRTR HELLO and then waits for an answer.  With the
++		 * callback installed too late that HELLO is lost, so the AP's
++		 * name service never sees the modem, never greets it, and the
++		 * firmware asserts 40 s later (fatal error without message).
++		 * The ADSP survives the same race only because it keeps talking.
++		 * The modem ACKs our reciprocal OPEN, so this window is exactly
++		 * the OPEN_ACK round trip.
++		 */
++		ept = &channel->ept;
++		ept->rpdev = rpdev;
++		ept->cb = cb;
++		ept->priv = priv;
++		ept->ops = &glink_endpoint_ops;
++
+ 		ret = qcom_glink_create_remote(glink, channel);
+ 		if (ret)
+ 			return NULL;
+ 	}
+ 
+-	ept = &channel->ept;
+-	ept->rpdev = rpdev;
+-	ept->cb = cb;
+-	ept->priv = priv;
+-	ept->ops = &glink_endpoint_ops;
++	/* violet: advertise the base intents now, as downstream does when the
++	 * channel opens, rather than in announce_create() after the driver's
++	 * probe.  Clients such as q6core send their first request from probe,
++	 * the ADSP answers at once, and with no intent available it has to
++	 * send RX_INTENT_REQ - and the sm6150 ADSP (ADSP.VT.5.2) stops
++	 * servicing the whole edge right after sending one.
++	 */
++	qcom_glink_advertise_base_intents(channel, rpdev->dev.of_node);
+ 
+ 	return ept;
+ }
+ 
+-static int qcom_glink_announce_create(struct rpmsg_device *rpdev)
++static int qcom_glink_advertise_base_intents(struct glink_channel *channel,
++					     struct device_node *np)
+ {
+-	struct glink_channel *channel = to_glink_channel(rpdev->ept);
+-	struct device_node *np = rpdev->dev.of_node;
+ 	struct qcom_glink *glink = channel->glink;
+ 	struct glink_core_rx_intent *intent;
+ 	const struct property *prop = NULL;
+@@ -1373,6 +1469,10 @@ static int qcom_glink_announce_create(struct rpmsg_device *rpdev)
+ 	if (glink->intentless || !completion_done(&channel->open_ack))
+ 		return 0;
+ 
++	if (channel->intents_announced)
++		return 0;
++	channel->intents_announced = true;
++
+ 	prop = of_find_property(np, "qcom,intents", NULL);
+ 	if (prop) {
+ 		val = prop->value;
+@@ -1395,6 +1495,12 @@ static int qcom_glink_announce_create(struct rpmsg_device *rpdev)
+ 	return 0;
+ }
+ 
++static int qcom_glink_announce_create(struct rpmsg_device *rpdev)
++{
++	return qcom_glink_advertise_base_intents(to_glink_channel(rpdev->ept),
++						 rpdev->dev.of_node);
++}
++
+ static void qcom_glink_remove_rpmsg_device(struct qcom_glink *glink, struct glink_channel *channel)
+ {
+ 	struct rpmsg_channel_info chinfo;
+@@ -1525,7 +1631,7 @@ static int __qcom_glink_send(struct glink_channel *channel,
+ 			chunk_size = SZ_8K;
+ 
+ 		req.msg.cmd = cpu_to_le16(offset == 0 ? GLINK_CMD_TX_DATA : GLINK_CMD_TX_DATA_CONT);
+-		req.msg.param1 = cpu_to_le16(channel->lcid);
++		req.msg.param1 = cpu_to_le16(qcom_glink_tx_cid(channel));
+ 		req.msg.param2 = cpu_to_le32(iid);
+ 		req.chunk_size = cpu_to_le32(chunk_size);
+ 		req.left_size = cpu_to_le32(len - offset - chunk_size);
+diff --git a/drivers/soc/qcom/qcom_pd_mapper.c b/drivers/soc/qcom/qcom_pd_mapper.c
+index 0dc1a7946..574dde173 100644
+--- a/drivers/soc/qcom/qcom_pd_mapper.c
++++ b/drivers/soc/qcom/qcom_pd_mapper.c
+@@ -417,10 +417,18 @@ static const struct qcom_pdm_domain_data *qcs404_domains[] = {
+ 
+ static const struct qcom_pdm_domain_data *qcs615_domains[] = {
+ 	&adsp_audio_pd,
+-	&adsp_root_pd,
++	/*
++	 * One entry per domain: the root domains must answer "tms/pdr_enabled"
++	 * (PDR clients such as q6afe/q6asm ask for the root first), and the
++	 * modem firmware queries it on msm/modem/root_pd while it initialises;
++	 * without it the modem stalls until its watchdog fires ~40 s later.
++	 * Same layout as sc7180, which shares the modem-hosted WLAN setup.
++	 * From the Redmi Note 7 Pro port (github.com/VipinVIP/violet-sm6150-mainline).
++	 */
++	&adsp_root_pd_pdr,
+ 	&adsp_sensor_pd,
+ 	&cdsp_root_pd,
+-	&mpss_root_pd,
++	&mpss_root_pd_gps_pdr,
+ 	&mpss_wlan_pd,
+ 	NULL,
+ };
+@@ -620,6 +628,8 @@ static const struct of_device_id qcom_pdm_domains[] __maybe_unused = {
+ 	{ .compatible = "qcom,sm7325", .data = sc7280_domains, },
+ 	{ .compatible = "qcom,sm8150", .data = sm8150_domains, },
+ 	{ .compatible = "qcom,sm8250", .data = sm8250_domains, },
++	/* SM6150 phones (Xiaomi mojito, violet): same PD layout as qcs615 */
++	{ .compatible = "qcom,sm6150", .data = qcs615_domains, },
+ 	{ .compatible = "qcom,sm8350", .data = sm8350_domains, },
+ 	{ .compatible = "qcom,sm8450", .data = sm8350_domains, },
+ 	{ .compatible = "qcom,sm8550", .data = sm8550_domains, },
+diff --git a/include/linux/power_supply.h b/include/linux/power_supply.h
+index 7a5e4c324..98a345049 100644
+--- a/include/linux/power_supply.h
++++ b/include/linux/power_supply.h
+@@ -178,6 +178,7 @@ enum power_supply_property {
+ 	POWER_SUPPLY_PROP_MANUFACTURE_DAY,
+ 	POWER_SUPPLY_PROP_INTERNAL_RESISTANCE,
+ 	POWER_SUPPLY_PROP_STATE_OF_HEALTH,
++	POWER_SUPPLY_PROP_CHARGING_ENABLED,
+ 	/* Properties of type `const char *' */
+ 	POWER_SUPPLY_PROP_MODEL_NAME,
+ 	POWER_SUPPLY_PROP_MANUFACTURER,

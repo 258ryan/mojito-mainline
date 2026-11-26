@@ -1,0 +1,88 @@
+diff -ru ath10k.orig/qmi.c ath10k/qmi.c
+--- ath10k.orig/qmi.c	2026-11-27 00:29:10.593038552 +0500
++++ ath10k/qmi.c	2026-11-27 00:29:10.610771175 +0500
+@@ -811,6 +811,8 @@
+ 	struct ath10k_snoc *ar_snoc = ath10k_snoc_priv(ar);
+ 	int ret;
+ 
++	ath10k_snoc_early_power(ar, true);
++
+ 	ret = ath10k_qmi_ind_register_send_sync_msg(qmi);
+ 	if (ret)
+ 		return;
+@@ -907,6 +909,7 @@
+ 
+ 	ath10k_qmi_remove_msa_permission(qmi);
+ 	ath10k_core_free_board_files(ar);
++	ath10k_snoc_early_power(ar, false);
+ 	if (!test_bit(ATH10K_SNOC_FLAG_UNREGISTERING, &ar_snoc->flags) &&
+ 	    !test_bit(ATH10K_SNOC_FLAG_MODEM_STOPPED, &ar_snoc->flags))
+ 		ath10k_snoc_fw_crashed_dump(ar);
+diff -ru ath10k.orig/snoc.c ath10k/snoc.c
+--- ath10k.orig/snoc.c	2026-11-27 00:29:10.593293883 +0500
++++ ath10k/snoc.c	2026-11-27 00:29:19.310945774 +0500
+@@ -6,6 +6,7 @@
+ 
+ #include <linux/bits.h>
+ #include <linux/clk.h>
++#include <linux/delay.h>
+ #include <linux/io.h>
+ #include <linux/kernel.h>
+ #include <linux/module.h>
+@@ -1066,6 +1067,38 @@
+ 	return ret_vreg ? : ret_seq;
+ }
+ 
++/* TEST: power the radio when the WLFW service appears, as stock icnss does. */
++static bool early_power;
++module_param(early_power, bool, 0644);
++MODULE_PARM_DESC(early_power, "TEST: enable pwrseq/regulators before the first WLFW request");
++
++static uint early_delay_ms;
++module_param(early_delay_ms, uint, 0644);
++MODULE_PARM_DESC(early_delay_ms, "TEST: wait after early power-on before continuing");
++
++static bool early_powered;
++
++void ath10k_snoc_early_power(struct ath10k *ar, bool on)
++{
++	int ret;
++
++	if (on == early_powered || (on && !early_power))
++		return;
++
++	if (on) {
++		ret = ath10k_hw_power_on(ar);
++		ath10k_info(ar, "early_power: on, ret %d, delay %u ms\n", ret, early_delay_ms);
++		if (ret)
++			return;
++		early_powered = true;
++		msleep(early_delay_ms);
++	} else {
++		ret = ath10k_hw_power_off(ar);
++		ath10k_info(ar, "early_power: off, ret %d\n", ret);
++		early_powered = false;
++	}
++}
++
+ static void ath10k_snoc_wlan_disable(struct ath10k *ar)
+ {
+ 	struct ath10k_snoc *ar_snoc = ath10k_snoc_priv(ar);
+@@ -1904,6 +1937,7 @@
+ 	ath10k_snoc_release_resource(ar);
+ 	ath10k_modem_deinit(ar);
+ 	ath10k_qmi_deinit(ar);
++	ath10k_snoc_early_power(ar, false);
+ 	ath10k_core_destroy(ar);
+ 
+ 	return 0;
+diff -ru ath10k.orig/snoc.h ath10k/snoc.h
+--- ath10k.orig/snoc.h	2026-11-27 00:29:10.593332589 +0500
++++ ath10k/snoc.h	2026-11-27 00:29:10.610393401 +0500
+@@ -97,5 +97,6 @@
+ 
+ int ath10k_snoc_fw_indication(struct ath10k *ar, u64 type);
+ void ath10k_snoc_fw_crashed_dump(struct ath10k *ar);
++void ath10k_snoc_early_power(struct ath10k *ar, bool on);
+ 
+ #endif /* _SNOC_H_ */

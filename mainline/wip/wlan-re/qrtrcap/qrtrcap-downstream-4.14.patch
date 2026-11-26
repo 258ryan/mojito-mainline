@@ -1,0 +1,209 @@
+--- a/net/qrtr/qrtr.c	2026-11-27 01:39:56.016338576 +0500
++++ b/net/qrtr/qrtr.c	2026-11-27 01:39:56.042803179 +0500
+@@ -27,6 +27,7 @@
+ #include <uapi/linux/sched/types.h>
+ 
+ #include "qrtr.h"
++#include "qrtrcap.h"
+ 
+ #define QRTR_LOG_PAGE_CNT 4
+ #define QRTR_INFO(ctx, x, ...)				\
+@@ -582,6 +583,8 @@
+ 		return rc;
+ 	}
+ 
++	qrtrcap_skb(QRTRCAP_TX, NULL, 0, skb);
++
+ 	mutex_lock(&node->ep_lock);
+ 	if (node->ep)
+ 		rc = node->ep->xmit(node->ep, skb);
+@@ -777,6 +780,8 @@
+ 	unsigned int ver;
+ 	size_t hdrlen;
+ 
++	qrtrcap_raw(QRTRCAP_RX, data, len);
++
+ 	if (len & 3)
+ 		return -EINVAL;
+ 
+@@ -1523,6 +1528,20 @@
+ 	cb->src_node = from->sq_node;
+ 	cb->src_port = from->sq_port;
+ 
++	{
++		struct qrtr_hdr_v1 h = {
++			.version = cpu_to_le32(QRTR_PROTO_VER_1),
++			.type = cpu_to_le32(type),
++			.src_node_id = cpu_to_le32(from->sq_node),
++			.src_port_id = cpu_to_le32(from->sq_port),
++			.dst_node_id = cpu_to_le32(to->sq_node),
++			.dst_port_id = cpu_to_le32(to->sq_port),
++			.size = cpu_to_le32(skb->len),
++		};
++
++		qrtrcap_skb(QRTRCAP_LOCAL, &h, sizeof(h), skb);
++	}
++
+ 	if (sock_queue_rcv_skb(&ipc->sk, skb)) {
+ 		qrtr_port_put(ipc);
+ 		kfree_skb(skb);
+@@ -2012,6 +2031,8 @@
+ {
+ 	int rc;
+ 
++	qrtrcap_init();
++
+ 	rc = proto_register(&qrtr_proto, 1);
+ 	if (rc)
+ 		return rc;
+--- a/net/qrtr/Makefile	2026-11-27 01:39:56.016394179 +0500
++++ b/net/qrtr/Makefile	2026-11-27 01:39:56.051449259 +0500
+@@ -1,4 +1,4 @@
+-obj-$(CONFIG_QRTR) := qrtr.o
++obj-$(CONFIG_QRTR) := qrtr.o qrtrcap.o
+ 
+ obj-$(CONFIG_QRTR_SMD) += qrtr-smd.o
+ qrtr-smd-y	:= smd.o
+--- /dev/null	2026-11-25 20:59:34.595987302 +0500
++++ b/net/qrtr/qrtrcap.c	2026-11-27 01:39:56.017622091 +0500
+@@ -0,0 +1,125 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * qrtrcap: keep a copy of every QRTR packet from boot in a private buffer and
++ * expose it as /proc/qrtrcap (root only). Recording stops when the buffer is
++ * full, so the start of boot is never overwritten. Debug tool, not for release.
++ */
++#include <linux/kernel.h>
++#include <linux/proc_fs.h>
++#include <linux/sched/clock.h>
++#include <linux/skbuff.h>
++#include <linux/spinlock.h>
++#include <linux/uaccess.h>
++#include <linux/vmalloc.h>
++#include "qrtrcap.h"
++
++#define QC_SIZE   (48u << 20)
++#define QC_MAXPKT (16u << 10)
++#define QC_MAGIC  0x50414351u	/* "QCAP" */
++
++struct qc_rec {
++	u32 magic;
++	u32 dir;
++	u64 ts_ns;
++	u32 origlen;	/* bytes the packet had */
++	u32 caplen;	/* bytes stored after this header, then padded to 4 */
++};
++
++static u8 *qc_buf;
++static size_t qc_used;
++static u32 qc_dropped;
++static DEFINE_SPINLOCK(qc_lock);
++
++/* Reserve space and fill the header; returns the payload area. Lock held. */
++static u8 *qc_reserve(u32 dir, size_t origlen, u32 *caplen)
++{
++	struct qc_rec *r;
++	size_t need;
++
++	if (!qc_buf)
++		return NULL;
++	*caplen = min_t(size_t, origlen, QC_MAXPKT);
++	need = sizeof(*r) + ALIGN(*caplen, 4);
++	if (qc_used + need > QC_SIZE) {
++		if (!qc_dropped++)
++			pr_warn("qrtrcap: buffer full, further packets dropped\n");
++		return NULL;
++	}
++	r = (struct qc_rec *)(qc_buf + qc_used);
++	r->magic = QC_MAGIC;
++	r->dir = dir;
++	r->ts_ns = local_clock();
++	r->origlen = origlen;
++	r->caplen = *caplen;
++	return (u8 *)(r + 1);
++}
++
++static void qc_commit(u32 caplen)
++{
++	/* publish only after the payload is in place, for lockless readers */
++	smp_store_release(&qc_used,
++			  qc_used + sizeof(struct qc_rec) + ALIGN(caplen, 4));
++}
++
++/* A complete frame as received from a remote node (header included). */
++void qrtrcap_raw(u32 dir, const void *data, size_t len)
++{
++	unsigned long flags;
++	u32 caplen;
++	u8 *p;
++
++	spin_lock_irqsave(&qc_lock, flags);
++	p = qc_reserve(dir, len, &caplen);
++	if (p) {
++		memcpy(p, data, caplen);
++		qc_commit(caplen);
++	}
++	spin_unlock_irqrestore(&qc_lock, flags);
++}
++
++/*
++ * A packet held in an skb. With @hdr set (local delivery, no wire header) the
++ * given header is stored in front of the skb's payload.
++ */
++void qrtrcap_skb(u32 dir, const void *hdr, size_t hdrlen, const struct sk_buff *skb)
++{
++	unsigned long flags;
++	u32 caplen, h;
++	u8 *p;
++
++	spin_lock_irqsave(&qc_lock, flags);
++	p = qc_reserve(dir, hdrlen + skb->len, &caplen);
++	if (p) {
++		h = min_t(u32, hdrlen, caplen);
++		if (h)
++			memcpy(p, hdr, h);
++		if (caplen > h && skb_copy_bits(skb, 0, p + h, caplen - h))
++			memset(p + h, 0xee, caplen - h);
++		qc_commit(caplen);
++	}
++	spin_unlock_irqrestore(&qc_lock, flags);
++}
++
++static ssize_t qc_read(struct file *f, char __user *ubuf, size_t n, loff_t *pos)
++{
++	return simple_read_from_buffer(ubuf, n, pos, qc_buf,
++				       smp_load_acquire(&qc_used));
++}
++
++static const struct file_operations qc_fops = {
++	.owner = THIS_MODULE,
++	.read = qc_read,
++	.llseek = default_llseek,
++};
++
++void qrtrcap_init(void)
++{
++	qc_buf = vmalloc(QC_SIZE);
++	if (!qc_buf) {
++		pr_err("qrtrcap: no memory\n");
++		return;
++	}
++	if (!proc_create("qrtrcap", 0400, NULL, &qc_fops))
++		pr_err("qrtrcap: cannot create /proc/qrtrcap\n");
++	pr_info("qrtrcap: recording QRTR into %u MiB\n", QC_SIZE >> 20);
++}
+--- /dev/null	2026-11-25 20:59:34.595987302 +0500
++++ b/net/qrtr/qrtrcap.h	2026-11-27 01:39:56.017874323 +0500
+@@ -0,0 +1,12 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++#ifndef __QRTRCAP_H
++#define __QRTRCAP_H
++#include <linux/types.h>
++struct sk_buff;
++#define QRTRCAP_RX    0		/* from a remote node (modem, DSPs) */
++#define QRTRCAP_TX    1		/* to a remote node */
++#define QRTRCAP_LOCAL 2		/* between two sockets on this CPU */
++void qrtrcap_init(void);
++void qrtrcap_raw(u32 dir, const void *data, size_t len);
++void qrtrcap_skb(u32 dir, const void *hdr, size_t hdrlen, const struct sk_buff *skb);
++#endif
