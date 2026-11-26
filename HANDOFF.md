@@ -731,6 +731,24 @@ Later tests (2026-11-26 evening):
   => The difference is on the MODEM side, not in anything the AP drives: same wlanmdsp.mbn, but the modem image/config, EFS, or the services the modem talks
   to differ between MIUI and pmOS. Next: compare the QMI/QRTR service list and the modem's tftp/rmtfs file requests under MIUI vs pmOS, and the modem firmware
   files actually loaded (MIUI loads them from /vendor/firmware_mnt, pmOS from /lib/firmware/postmarketos: compare checksums of modem.* and the mcfg/mbn set).
+- **Firmware RE of the capability path (2026-11-27, wlanmdsp.mbn 4b1510cc, llvm-objdump-18 recipe above; addresses are absolute):**
+  The cap handler's platform init `b01c15b0` returns 1 (-> QMI error 119) at exactly four points: the precondition `b01c1568`; **(A)** CCPM
+  `ccpm_ccvs_plat_req` `b0147d50(client, 1, 0)`; **(B)** CCPM WLAN power request `b01478e8(client, 6, 0, 0)`; **(C)** the same with state 7. Between B and C it
+  waits 10000 (`b003b4d8(0x2710)`), sets bit 0 of WCSS reg **0xa6750000** and polls it (`b01c2b30(0xa6750000, 1, 1, delay 10, count 10)`, result ignored),
+  waits 3000, and optionally runs `b01c2d00` (only if 0xa6750000 bit 0 was already set: polls `[gp+0x13c]+0x22070` for bit 20 with delay 200 x10).
+  After C: HW version/chip-id table match at `[gp+0x13c]+0x80000` (miss = assert "Invalid HW variant", not an error reply), then `b014bc38`, `b01c14c0`.
+  - `b01c2b30` = generic poll(addr, mask, value, delay, count): 0 on match, -1 after count tries, `b003b4d8(delay)` between tries.
+  - `b003b4d8` = busy/timer delay; the delays in this path add up to ~15-20 ms if the unit is us, so the observed ~200 ms has to be spent INSIDE a CCPM call.
+  - `b01478e8`: returns 0xc if the client or its manager (`client+0xc`) is NULL; for a type-1 client (`client+4 == 1`) calls `b014a820` and returns success
+    only if the global **0xb0300ac0 == 1**. `b0147d50`: returns 0xd ("CCPM not initialized", plain string at 0xb02a4381) if byte **0xb03200a0** is 0, otherwise
+    builds a request from the state table at 0xb031a740 and calls `b01479a4` under a lock (`b02122e8`/`b02122f0`).
+  - **`b014ada0` is the CCPM client-init routine** (its tail writes 0xb0300ac0 = 1 at 0xb014b028): loops 7 table entries (`b0147370`), clears bit 0 of
+    **0xa67c0000**, waits 200, then `b0145e40`, `b0145db0`, `b0147550`, `b0146400` (returns 5 = early exit) ... On mainline this init evidently never completes.
+  - Log text is QShrink-hashed (F3 descriptors {line|ssid, mask, hash}); only assert strings are plain (e.g. "platform_helium_init.c:Invalid HW variant",
+    "ccpm_ccvs_plat_req from wrong platform client", "ccpm_mgr_deinit").
+  - **Next RE step:** find who calls `b014ada0`'s caller `0xb0148bdc(obj, state==1)` through the ops table (`ops+0x38`), and what event/signal drives the CCPM
+    state machine to state 1 (the earlier finding: walkers at 0xb01476d8 / 0xb0149138). Also decode `b01479a4` / `b014a820` for the timed wait (look for
+    calls taking a timeout argument right before an error return).
 - **Still unknown:** what the modem's WLAN power-up waits ~200 ms for. Needs the modem's own log or a different angle (e.g. memory capture before `qcom_pas_shutdown`, risky).
 - sm7125-mainline (Redmi Note 9 Pro, same PMICs, same `wlan_mem` 0x93900000, Wi-Fi works, unpatched ath10k): 2 MB MSA +
   `qcom,msa-fixed-perm` + ch1 = L11c. With that config here: boots fine, MSA permission errors gone, still 119. The repo DTS now uses it.
