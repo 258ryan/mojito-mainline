@@ -8,7 +8,7 @@ State as of 2026-11-27.
 **Working on slot B (mainline 7.4-rc4, package `pkgrel=21`):** boot to SSH over USB, UFS, USB gadget, watchdog, TLMM, the real display
 stack with DCS brightness, touch, the Adreno 612 (freedreno), Phosh on boot, flash LED, RTC, **battery readout (own fuel-gauge driver),
 charging (SMB5), the ADSP, and the modem: LTE registration, mobile data (IPv4 + IPv6, ~22 Mbit/s) and SMS sending verified.**
-**Not working / not started:** calls (need call audio), audio, Wi-Fi/Bluetooth, camera, sensors, suspend, vibrator, Vulkan.
+**Not working / not started:** calls (need call audio), audio, Wi-Fi (node added, firmware handshake fails, see "Wi-Fi"), Bluetooth, camera, sensors, suspend, vibrator, Vulkan.
 **Slot A** (downstream 4.14) is untouched and works; keep it that way.
 
 **Exactly what is on the phone right now:**
@@ -20,8 +20,7 @@ charging (SMB5), the ADSP, and the modem: LTE registration, mobile data (IPv4 + 
   (modemst1/2, fsg, fsc) exists on the PC, outside the repo (it carries device identifiers).
 - The clock is only right after an NTP sync over LTE (`ntpd -q -n -p pool.ntp.org`); there is no time sync at boot yet.
 
-**Suggested order from here:** (1) Wi-Fi: the modem already serves the "ATH10k WLAN firmware service" (QMI 69), so it needs the
-`wifi@18800000` node, the WCN3990 rails and the Redmi Note 7 Pro's ath10k patches 0010/0015; (2) audio: ADSP speaks **legacy APR**
+**Suggested order from here:** (1) Wi-Fi: node and firmware are in place but the WLFW handshake fails (see "Wi-Fi"); (2) audio: ADSP speaks **legacy APR**
 (channels `apr_audio_svc`, `apr_apps2`), not AudioReach, so it needs APR nodes + `qcom,sm8250-sndcard`, and very likely the SMMU
 patch 0017 of the violet port (hyp-owned context banks) before any stream; then call audio (`q6voiced`); (3) time sync at boot;
 (4) KWin/Finder smoke test; (5) suspend.
@@ -496,6 +495,34 @@ master/slave-kernel, wlan, ipa), `remoteproc_mpss` (`qcom,sm8150-mpss-pas`, pas-
   `nmcli radio wwan on`; if it recurs, capture `mmcli -G DEBUG` logs of the Start Network.
 - `qmi-utils` (qmicli) is installed for debugging; this firmware rejects the WDS autoconnect query (`InvalidOperation`).
 
+### Wi-Fi (WCN3990 / ath10k): node added, handshake fails (disabled in the DTS)
+
+`wifi@18800000` from the stock `qcom,icnss@18800000` (SID 0x1640 mask 1, CE SPI 414-425 with four cells, rails pm6150 L9 /
+pm6150l L1, L2, L10). The stock `wlan_msa_region` is 2 MB but the firmware gets 1 MB (`qcom,wlan-msa-memory`), so the DTS splits it.
+Files on the phone (`/lib/firmware/ath10k/WCN3990/hw1.0/`): `firmware-5.bin` from linux-firmware-ath10k (a 60-byte feature
+descriptor; the code is `wlanmdsp.mbn` on the modem) and the stock `bdwlan.bin` as `board.bin`. `ath10k_snoc` is blacklisted
+on the phone (`/etc/modprobe.d/ath10k.conf`).
+
+ath10k reaches the modem's WLFW service (QMI 69), then:
+- no quirk: `host capability request rejected: 90`; `qcom,snoc-host-cap-8bit-quirk`: rejected with 1 (malformed);
+- `qcom,snoc-host-cap-skip-quirk`: MSA info / permissions / MSA ready pass, then `capability req rejected: 119`;
+- every time the modem's `wlan_process` crashes ~10 s later (`EF:wlan_process:0x1:qmi_platform:...:cmnos_thread.c`), PDR restarts
+  it, and the loop repeats; cleanup prints `failed to unmap msa permissions: -22` (a consequence, not the cause);
+- `qcom,msa-fixed-perm` **hangs the boot** in udev ("waiting for uevents") even with ath10k blacklisted: do not use it;
+- 1 MB vs 2 MB MSA: no difference. ath10k's QMI code is identical between 7.2 (Note 7 Pro, Wi-Fi works) and 7.4.
+Next ideas: log which files the modem fetches through tqftpserv (its printf output is block-buffered, run it under a pty);
+compare with the Note 7 Pro's file layout (`qcom/qcs615/...`); check whether the WLAN PD needs a servreg/PDR step before WLFW
+answers; then violet's ath10k patches 0010/0015 (those address later failures: quiet mode, station vdev start).
+
+### Phosh: display corners and the camera cutout (`mainline/gmobile/`)
+
+Phosh (`shell-layout 'device'`) takes corners and cutouts from gmobile's built-in panel data, matched by the DT compatible, not from
+GSettings. gmobile 0.7.5 had no `xiaomi,mojito`, so the clock sat under the punch hole and icons ran into the corners.
+`mainline/gmobile/` is Alpine's gmobile 0.7.5 + `xiaomi,mojito.json`: 1080x2400, 67x149 mm, corner radius 119 px, camera circle
+centre (540,52) radius 37, from the stock overlay (`config_mainBuiltInDisplayCutout` "M 0,0 H -37 V 93 H 37 V 0 H 0 Z",
+`rounded_corner_radius` 119px, via the LineageOS mojito tree). Build with `pmbootstrap build --arch aarch64 gmobile` (without
+`--arch` it builds x86_64), install `gmobile` + `gmobile-udev` r1, restart Phosh. Upstream candidate for gmobile.
+
 ## Packaging the v2 boot image
 
 `mainline/mk-bootimg-v2.sh <Image> <dtb> <ramdisk> [out.img]` with `PMOS_BOOT_UUID`/`PMOS_ROOT_UUID` set
@@ -526,5 +553,6 @@ master/slave-kernel, wlan, ipa), `remoteproc_mpss` (`qcom,sm8150-mpss-pas`, pas-
 | `mainline/build-dtb.sh` | compiles the DTS to a DTB without rebuilding the kernel package (fast loop) |
 | `mainline/dummy-overlay.dts` | the dtbo experiment (ABL rejected it) |
 | `mainline/NOTES.md` | facts pulled from the stock device tree |
+| `mainline/gmobile/` | gmobile 0.7.5 + the Redmi Note 10 display panel (corners, camera cutout) for Phosh |
 | `tools/install-modem-userspace.sh` | installs rmtfs/tqftpserv/qrtr/ModemManager on the phone from the PC, enables them, optional APN |
 | `tools/` | lpunpack.py (super.img), hwprobe.sh, evrec.py, vtype.py, gltest.py (off-screen OpenGL ES test on the render node), run-phosh.sh (Phosh as root, no lock-screen password works), run-phosh-user.sh (Phosh as `user` with a PAM service, takes a duration), i2cprobe.py (probe the touch I2C bus), i2c3probe.py (read-only probe of the chips on i2c3) |

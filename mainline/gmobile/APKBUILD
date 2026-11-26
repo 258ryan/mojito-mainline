@@ -1,0 +1,51 @@
+# Alpine community/gmobile 0.7.5 plus the Redmi Note 10 display panel (upstream candidate).
+maintainer="team/phosh <achill@achill.org>"
+pkgname=gmobile
+pkgver=0.7.5
+pkgrel=1
+pkgdesc="Functions useful in mobile related, glib based projects"
+url="https://gitlab.gnome.org/World/Phosh/gmobile"
+arch="all"
+license="GPL-3.0-only"
+makedepends="
+	meson
+	glib-dev
+	json-glib-dev
+	gobject-introspection-dev
+	vala
+	"
+subpackages="
+	$pkgname-dbg
+	$pkgname-dev
+	$pkgname-examples
+	$pkgname-udev
+	"
+replaces="phoc"
+source="https://sources.phosh.mobi/releases/gmobile/gmobile-$pkgver.tar.xz
+	0001-data-add-Xiaomi-Redmi-Note-10-mojito.patch
+	"
+
+build() {
+	abuild-meson build
+	meson compile -C build
+}
+
+check() {
+	meson test -C build
+}
+
+package() {
+	DESTDIR="$pkgdir" meson install --no-rebuild -C build
+}
+
+examples() {
+	pkgdesc="$pkgdesc (examples)"
+	depends="phoc phosh"
+
+	amove usr/bin
+}
+
+sha512sums="
+ddf45c59065de079ff4b83b9f10086604abd2654e85423d429c7ac09ba2e2338dce806d8e291aba5183fb82fdd38d1c27ea87dc75084214fe8f6a7cc956684a5  gmobile-0.7.5.tar.xz
+069a8c289d61cb52ec47e166967e86e6856e0954d27f7b13fe107daaa53c2574aee2132080f81a8f32b091ea0bd2004c783d3929d086c2c127131510ced884c8  0001-data-add-Xiaomi-Redmi-Note-10-mojito.patch
+"

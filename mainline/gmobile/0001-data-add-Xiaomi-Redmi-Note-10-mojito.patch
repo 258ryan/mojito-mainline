@@ -1,0 +1,36 @@
+From: postmarketOS mojito port
+Subject: [PATCH] data: add Xiaomi Redmi Note 10 (mojito)
+
+Values from the stock MIUI overlay (via the LineageOS mojito device tree):
+config_mainBuiltInDisplayCutout "M 0,0 H -37 V 93 H 37 V 0 H 0 Z" (top-center punch hole),
+rounded_corner_radius 119px; physical size from the stock panel node (67 x 149 mm).
+---
+diff -urN a/data/devices/display-panels/xiaomi,mojito.json b/data/devices/display-panels/xiaomi,mojito.json
+--- a/data/devices/display-panels/xiaomi,mojito.json	1970-01-01 05:00:00.000000000 +0500
++++ b/data/devices/display-panels/xiaomi,mojito.json	2026-11-26 17:01:46.704249820 +0500
+@@ -0,0 +1,14 @@
++{
++  "name": "Xiaomi Redmi Note 10",
++  "x-res": 1080,
++  "y-res": 2400,
++  "width": 67,
++  "height": 149,
++  "corner-radii": [119, 119, 119, 119],
++  "cutouts": [
++    {
++      "name": "camera",
++      "path": "M 503,52 a 37,37 0 1,0 74,0 a 37,37 0 1,0 -74,0 Z"
++    }
++  ]
++}
+diff -urN a/data/gmobile.gresources.xml b/data/gmobile.gresources.xml
+--- a/data/gmobile.gresources.xml	2026-11-26 17:01:46.700941571 +0500
++++ b/data/gmobile.gresources.xml	2026-11-26 17:01:46.726086874 +0500
+@@ -39,6 +39,7 @@
+     <file preprocess="json-stripblanks">devices/display-panels/xiaomi,joyeuse.json</file>
+     <file preprocess="json-stripblanks">devices/display-panels/xiaomi,onclite.json</file>
+     <file preprocess="json-stripblanks">devices/display-panels/xiaomi,lavender.json</file>
++    <file preprocess="json-stripblanks">devices/display-panels/xiaomi,mojito.json</file>
+     <file preprocess="json-stripblanks">devices/display-panels/xiaomi,sweet.json</file>
+   </gresource>
+ </gresources>
