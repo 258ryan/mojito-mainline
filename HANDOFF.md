@@ -1,7 +1,7 @@
 # Handoff: postmarketOS on the Redmi Note 10 (mojito/sunny)
 
 For the next agent picking this up. Read the START HERE section, then the rest as needed, before touching the phone.
-State as of 2026-11-27.
+State as of 2026-11-27 (Wi-Fi work 2026-11-26/27).
 
 ## START HERE (2026-11-26, end of session): where things stand
 
@@ -9,44 +9,66 @@ State as of 2026-11-27.
 the correct corner/cutout layout (gmobile panel data, `mainline/gmobile/`), **battery gauge** (`qcom_qg_lite`, patch 0010), **charging**
 (SMB5, patch 0008; wall ~1 A, PC port 500 mA, correct Charging/Full status), **ADSP**, **modem**: LTE data (~22 Mbit/s, IPv4+IPv6), SMS
 send, data on/off toggle, **APR audio services** (q6core/afe/asm/adm bound; no sound card yet).
-**Not working:** Wi-Fi (handshake, see "Wi-Fi"), speaker/mic/earpiece (needs the LPASS LPI pin driver, see "Audio"), calls (need audio),
+**Not working:** **Wi-Fi** (see next paragraph), speaker/mic/earpiece (needs the LPASS LPI pin driver, see "Audio"), calls (need audio),
 Bluetooth, volume-up key, haptics, sensors, suspend, Vulkan. **Slot A** (downstream 4.14) is untouched; keep it working.
 
+**Wi-Fi in one paragraph (details: section "Wi-Fi", it holds every test and result):** the modem's WLAN service (WLFW, QMI service 69) answers
+every request ind_register, host cap, msa info, msa ready, BDF download and cal report. Only the capability request fails: after a repeatable
+~200 ms the firmware returns the constant error 119 (the handler sets `r2 = #0x77` whenever its platform init `FUN_b01c15b0` returns non-zero),
+and `wlan_process` is killed ~9.4 s later. That init is the first power-up of the WCSS "Helium" block; from the firmware's own strings it enables
+the RF crystal over the WSI bus and waits for the RF chip, i.e. a hardware/clock condition we cannot see. **Everything on the Linux side that we
+can vary was tested on hardware and still gives 119:** rails and their order, GPIO 98 `cnss-wlan-en` (stock pin state, pull-up 16 mA, now in the
+DTS bound to remoteproc_mpss), the upstream WCN3990 PMU/pwrseq node, always-on rails at violet's voltages, MSA size and permissions (with and without
+`qcom,msa-fixed-perm`; the DTS now has none, like stock icnss and violet), host-capability message contents (live tunable `mainline/wip/0018`),
+`VBATT_REQ`, waiting for `MSA_READY_IND`, board data before the capability retry, an older firmware build (`HL.3.2.2-00715`), writable file-based
+rmtfs like violet. The violet port (Redmi Note 7 Pro, same SoC, Wi-Fi works) has the same device tree and services as far as read. **Open question:
+what the ~200 ms wait inside the modem's first power-up is.** The modem's memory and log are NOT readable (below), so the remaining ideas are:
+(1) compare against a phone state where Wi-Fi works: boot stock Android with root and dump GPIO/regulator/clock/pinctrl state, diff against ours
+(**back up `userdata` first: our rootfs is a loop file inside it**); (2) a full violet-parity image (direct supplies, no ch1, always-on LPM rails, no
+PMU) - parts of it were tested separately; (3) keep reading the firmware (recipe in the Wi-Fi section) for the wait.
+
 **Exactly what is on the phone right now:**
-- `boot_b` = r21 kernel + a Wi-Fi *test* DTB (Wi-Fi node enabled, sm7125-style: 2 MB MSA, `msa-fixed-perm`, ch1 = L11c, L10a always on,
-  APR audio). Harmless because `ath10k_snoc` is blacklisted (`/etc/modprobe.d/ath10k.conf`). To return to the repo state, build r23 and flash it.
+- `boot_b` = the r21 kernel + the DTB built from this repo's DTS at the end of the session (Wi-Fi node disabled, PMU node, GPIO 98 pinctrl,
+  L10a always on, APR audio). `ath10k_snoc` stays blacklisted (`/etc/modprobe.d/ath10k.conf`); load it by hand to test Wi-Fi.
+- Changed by hand on the rootfs: `/etc/conf.d/rmtfs` is violet-style (`rmtfs_files_path=/var/lib/rmtfs`, `rmtfs_avoid_writing=false`; the original is
+  `rmtfs.pmos-default`); `/var/lib/rmtfs/modem_fs1|fs2|fsg|fsc` are copies of the EFS backup images in `~/.claude-work/pmos-mojito/efs-backup-2026-11-26/` (the
+  modem writes to these files, the partitions are untouched). `/usr/lib/firmware/postmarketos/wlanmdsp.mbn.orig` is a copy of the original firmware (same as `wlanmdsp.mbn`).
 - Modules: r21. Packages added by hand: rmtfs, tqftpserv, qrtr, ModemManager (enabled at boot), qmi-utils, gmobile/gmobile-udev 0.7.5-r1
   (local build). NetworkManager connection `mobile` (carrier APN) autoconnects. `/lib/firmware/ath10k/WCN3990/hw1.0/{firmware-5.bin,
   board.bin}` (firmware-5 from linux-firmware-ath10k, board.bin = stock bdwlan.bin).
 - The clock is only right after NTP over LTE (`ntpd -q -n -p pool.ntp.org`); no time sync at boot yet.
 
-**Package state:** `mainline/linux-postmarketos-qcom-sm6150` is at **pkgrel=23, NOT BUILT YET** (adds patch 0014, the SMMU fix audio
-streams need, plus the DTS: APR audio, L10a always on, Wi-Fi node disabled). Build it first:
-`pmbootstrap build linux-postmarketos-qcom-sm6150` (~3 min with ccache; config/header changes ~13 min), then
-`tools/install-modules.sh`, `mk-bootimg-v2.sh`, flash `boot_b`. gmobile: `pmbootstrap build --arch aarch64 gmobile`.
+**Package state:** `mainline/linux-postmarketos-qcom-sm6150` is at **pkgrel=24, NOT BUILT YET** (patch 0001 was regenerated from the DTS and its checksum
+updated; includes patch 0014, the SMMU fix audio streams need). Build it: `pmbootstrap build linux-postmarketos-qcom-sm6150` (~3 min with ccache; config/header
+changes ~13 min), then `tools/install-modules.sh`, `mk-bootimg-v2.sh`, flash `boot_b` (and `fastboot set_active b` afterwards). gmobile: `pmbootstrap build --arch aarch64 gmobile`.
+DTS-only changes: `mainline/build-dtb.sh` (no package build).
 
-**Next steps, in order (the user's list):**
-1. **Wi-Fi: test `mainline/wip/0015` (ath10k registers for `pin_connect_result` like stock icnss).** It is the one remaining difference
-   found between the stock icnss handshake and ath10k's (see "Wi-Fi"). Quick test without a package build: apply it to a 7.4-rc4 tree with
-   the package config, `make ARCH=arm64 LLVM=1 LOCALVERSION= modules_prepare`, then
-   `make ARCH=arm64 LLVM=1 LOCALVERSION= M=drivers/net/wireless/ath/ath10k KBUILD_MODPOST_WARN=1 modules` (no MODVERSIONS, no
-   signing, so vermagic `7.4.0-rc4-sm6150` is enough; `LOCALVERSION=` drops the `+`), copy `ath10k_core.ko`/`ath10k_snoc.ko` to
-   `/lib/modules/7.4.0-rc4-sm6150/updates/`, `depmod`, `modprobe ath10k_snoc` on the test DTB. If it works: also try without
-   `msa-fixed-perm`/ch1, add the patch to the package, enable the node, then Note 7 Pro patches 0010/0015 for later failures.
-2. **Audio:** port `sm7150-mainline/linux` (tag v7.1_rc3) `drivers/pinctrl/qcom/pinctrl-sm7150-lpass-lpi.c` to SM6150 (LPI block at
+**Next steps, in order:**
+1. **Audio:** port `sm7150-mainline/linux` (tag v7.1_rc3) `drivers/pinctrl/qcom/pinctrl-sm7150-lpass-lpi.c` to SM6150 (LPI block at
    **0x62b52000**; 0x62b40000 is the SSC block that hangs the SoC), then macros + SoundWire + WCD937x + sound card from their
    `sm7150.dtsi` / `sm7150-xiaomi-*.dts`. Speaker = WCD937x AUX_OUT -> aw87xxx analog PA (i2c3 0x58/0x5b, chip id 0x59, not aw87390).
+2. **Wi-Fi:** only with new input (see the paragraph above; the user was told no one else to ask is known, so the Android state diff is the best lead).
 3. Volume-up key (pm6150l GPIO 2 in the sm7125 Xiaomi tree), PMIC haptics, Bluetooth (WCN3990 on UART; sm7125/sm7150 trees have the
    node), sensors (ADSP sensor core, QMI 400; no mainline driver), time sync at boot, suspend, KWin/Finder.
 
 **Rules and hazards learned the hard way** (details below):
 - The user runs `pmbootstrap build`; the agent flashes and diagnoses. Ask for the SSH password each session; never store it. Commit with the
-  GitHub no-reply identity (see `git log`); keep device identifiers, carrier/APN and phone numbers out of the repo.
+  GitHub no-reply identity (see `git log`; the repo has no user.email set, use `git -c user.name=... -c user.email=...`); keep device identifiers,
+  carrier/APN and phone numbers out of the repo.
 - **Stage risky drivers:** blacklist the module in `/etc/modprobe.d/` before flashing, load by hand over SSH, un-blacklist once it works.
-- **Do not restart the modem (`rc-service rmtfs restart`) while IPA is set up**: the modem asserts in `ipa_hal.c` and IPA times out; reboot.
+- **Do not restart the modem** (`rc-service rmtfs restart`, or `echo stop/start > remoteproc1/state`) **while IPA is set up**: the modem dies 40 s later
+  (`DOG detects stalled initialization`), recovery never completes, IPA times out; reboot.
+- **Never read the modem carve-out (0x8b000000, 0x8400000 bytes) via /dev/mem**: the read hangs the CPU (RCU stall); violet reports SoC resets. A memory capture
+  before the secure-world shutdown is therefore not possible; the coredump after shutdown (`coredump=enabled`, debugfs `crash`) is all zeros.
+- **Never `dd` the `modemst*`/`fsg`/`fsc` partitions on the phone**: the read hangs in the kernel (D state, unkillable) and then `sync` hangs too. Use the EFS backup
+  images on the PC. Recover a stuck phone with `echo 1 > /proc/sys/kernel/sysrq; echo b > /proc/sysrq-trigger` over ssh.
+- **Boot slot counter:** repeated forced resets without a clean boot make ABL mark slot B unbootable (phone stops in fastboot). `fastboot set_active b` resets it; do it after every flash.
+- `pkill -f <pattern>` kills your own shell when the pattern is in its command line; use `[p]attern` or kill by pid.
+- Test loop that is fast: poll ssh and a QRTR lookup of service 69 instead of fixed sleeps (reboot to Wi-Fi result ~40 s), and use writable module parameters between
+  WLAN-process restarts (every ~10 s while ath10k_snoc is loaded and failing). The modem reads `wlanmdsp.mbn` only at modem boot.
 - PMIC state survives a warm reboot (a latched charger suspend needs a replug). Regmap debugfs reads only the requested window:
   `dd if=/sys/kernel/debug/regmap/0-00/registers bs=9 skip=$((0xADDR)) count=N`.
-- Hangs/crashes: TLMM pins 0-3/6-9; an `mdss` `resets` line; `rmmod msm`; LPASS 0x62b40000 (SSC) without power. No log survives a reset.
+- Hangs/crashes: TLMM pins 0-3/6-9; an `mdss` `resets` line; `rmmod msm`; LPASS 0x62b40000 (SSC) without power; the modem carve-out. No log survives a reset.
 - Builds: ccache makes `.c`-only changes ~3 min. Object-only test compiles miss modpost errors (`MODULE_IMPORT_NS("IIO_CONSUMER")`).
 - `/tmp` on the phone is empty after reboot; run `rc-update -u` after adding services (1970 clock). apk caches repo indexes by URL: serve a
   new local repo on a new port. Reboot to fastboot from SSH: copy a small python script with the `reboot(..., "bootloader")` syscall.
@@ -536,6 +558,87 @@ Later tests (2026-11-26 evening):
   (MSS_MSA + WLAN [+ WLAN_CE], same as ath10k) -> msa_ready -> cap; **no host cap** (ath10k's skip quirk matches); same client id
   0x4b4e454c; the empty cap request matches. **The one difference: icnss sets `pin_connect_result_enable` in ind_register, ath10k does
   not** -> candidate fix `mainline/wip/0015`, untested (modules were built, the session ended before loading them).
+- **`mainline/wip/0015` TESTED (2026-11-26): does NOT fix it.** Patched ath10k_core/snoc (out-of-tree build, loaded from `updates/` on the test DTB:
+  L10a always on, msa-fixed-perm, ch1): still `capability req rejected: 119`, then `PDM: service 'wlan_process' crash: EF:wlan_process:0x1:qmi_platform:0x509c:cmnos_thread.c:4`
+  ~10 s later, firmware crashed, repeat. So `pin_connect_result` is not the missing piece. The patched modules are still in
+  `/lib/modules/7.4.0-rc4-sm6150/updates/` on the phone (snoc stays blacklisted; remove `updates/` to return to stock). Next ideas: capture the stock icnss QMI 69
+  traffic under downstream, the `qcom,wcn3998-pmu` node, or park Wi-Fi and do audio (step 2).
+- **Stock `wlanmdsp.mbn` reverse-engineered with REA/Ghidra 12.2 (Hexagon; file `stock/extract/fwall/wlanmdsp.mbn` in the work dir, sha256 4b1510cc...).** The firmware is
+  the on-SoC WCSS "Helium" WLAN block (`platform_helium*.c`, RF part over WSI, "Adrastea Clock"), not an external chip. `wlfw_process_req_cb` is FUN_b02166d8 (dispatcher; ids match ath10k:
+  0x20 ind_register, 0x23 wlan_cfg, 0x24 cap, 0x2d msa_info, 0x2e msa_ready, 0x34 host_cap). **The cap request (0x24, handler FUN_b01c0628) is where the firmware powers the WLAN block up for the
+  first time**: it calls FUN_b01c15b0 (= platform_helium_init: PLATFORM_CLIENT registration, `ccpm_ccvs_plat_req` voltage/clock votes, a write + poll on WCSS reg 0xa6750000, chip-id read at base+0x80000
+  matched against a table, `platform_ccpm_init`). Non-zero return -> error response (our 119, the error code is not a named constant at the call site); the asserts in this path are `platform_helium_init.c`
+  `plat_init_num_macs` / `platform_ccpm_init`. So the 119 is a failed modem-side power-up, not a host-protocol problem; the open question is WHICH step (precondition FUN_b01c1568, ccpm vote FUN_b0147d50 ->
+  "CCPM not initialized" = 0xd, the 0xa6750000 poll, or the chip-id table). Firmware also reads WLAN_SW_CTRL_GPIO / WCSS_PWR_REQ_GPIO itself. Stock DT `cnss_wlan_en` (gpio98) is defined but referenced by nothing.
+  Next: get the modem's own F3/diag log of that sequence (msg_v2_send strings), or read the failing step's return values; then match against rails/clocks/interconnect votes done by Linux.
+- **Static trace of FUN_b01c15b0 (REA/Ghidra), result so far:** NOT failing: precondition FUN_b01c1568 (calls ccpm_mgr_init FUN_b0147c50, always 0, and a static PLATFORM_CLIENT table lookup FUN_b01478b4, never
+  null), and the poll FUN_b01c2b30 on 0xa6750000 (return value ignored). Asserts (crash, not error reply): `platform_ccpm_init` via FUN_b014a3c8/FUN_b01c14c0 and `plat_init_num_macs` (chip-id table miss at base+0x80000).
+  Can return 1 (=> our error reply): `ccpm_ccvs_plat_req` FUN_b0147d50 (0xd "CCPM not initialized" if flag DAT_b03200a0 bit0 clear, 0xc if client/manager NULL) and `ccpm_request_wlan_pwr` FUN_b01478e8
+  (state 6 and 7): returns 0xc if the client's manager pointer (+0xc of the static PLATFORM_CLIENT struct at 0xb0300300, 0 in the image, filled at runtime) is NULL, and for a type-1 client returns 0 (success) ONLY when the
+  global DAT_b0300ac0 == 1 (written at 0xb014b028, code Ghidra did not define as a function; not yet decoded). Hypothesis (unproven): DAT_b0300ac0 / the manager pointer depend on state set by an earlier host request or
+  SMP2P bit that ath10k does not provide. Static tracing is slow here; a runtime log of the modem (msg_v2_send / ULog) would name the step directly.
+- **Modem coredump via remoteproc: tried 2026-11-26, USELESS as is.** `echo enabled > /sys/class/remoteproc/remoteproc1/coredump`, load ath10k_snoc, `echo 2 > /sys/kernel/debug/remoteproc/remoteproc1/crash`:
+  the modem restarts cleanly (IPA/data came back, no reboot needed) and a 135.9 MB ELF core appears in /sys/class/devcoredump/devcd1/data, but EVERY byte of every segment is zero.
+  Cause: `rproc_boot_recovery()` runs `rproc_stop()` (-> `qcom_pas_shutdown()`, TZ reclaims/scrubs the modem memory) BEFORE `rproc->ops->coredump()`. The mpss descriptor also has `minidump_id = 3`.
+  No `DIAG*` glink channel is exposed (modem channels: DATA1-4, DATA11, DS, IPCRTR, apr_*, glink_ssr...) and no diag-router tool is packaged. Getting modem memory would need a kernel patch that copies the
+  region before the shutdown (untested; reading modem-owned memory from HLOS can hit the XPU and reset the AP, like the secure-world GPIOs did). Do not repeat the stock dump.
+- **DAT_b0300ac0 decoded (2026-11-26).** Ghidra missed the setter (Hexagon packets/immext confuse its function discovery); `llvm-objdump-18` decodes it. The flag is written `= 1` at 0xb014b028, the tail
+  of the CCPM client-init routine at **0xb014ada0** (loops 8 entries of a table at 0xb0300840, also sets byte `gp+0xf0 = 1`, which the QMI dispatcher tests). It has no direct callers: it is tail-called (0xb0148bfc)
+  from `0xb0148bdc(obj, state)` when `state == 1`, and that function is installed at `ops+0x38` of a per-client-type ops table (switch at ~0xb01488a0-0xb0148a00). The ops slots are called from CCPM
+  state-machine walkers (e.g. 0xb01476d8 walks a client list, 0xb0149138 loops clients by bitmask), i.e. driven by the modem's own power-resource votes, not by a host input we can see.
+  Conclusion: the `ccpm_request_wlan_pwr` failure (needs DAT_b0300ac0 == 1) means the CCPM client-init never ran before the first WLAN power request; WHO triggers state 1 is not found. Static tracing = many
+  hand-read Hexagon hops; not worth continuing unless a runtime trace becomes possible.
+  Disassembly recipe (no Ghidra needed): carve the LOAD segment (vaddr 0xb0000000, size 0x2e8370) with a few lines of python, `llvm-objcopy-18 -I binary -O elf32-hexagon --rename-section
+  .data=.text,alloc,load,readonly,code seg.bin seg.o`, `llvm-objdump-18 -d --triple=hexagon --mcpu=hexagonv66 --adjust-vma=0xb0000000 seg.o`. Printed call/jump targets are section-relative:
+  real target = 0xb0000000 + printed. A packet starts after the previous line containing `}`; a function entry is a packet start (allocframe is mid-packet).
+- **CORRECTION (2026-11-26): the modem does NOT have the WLAN image built in; it fetches `wlanmdsp.mbn` from the AP through tqftpserv.** The modem blobs (modem.b17) hold the `wlan_pd` /
+  `wlan_process` PD definition with the candidate paths `/readonly/firmware/image/wlanmdsp.mbn`, `/readonly/vendor/firmware_mnt/image/wlanmdsp.mbn`, `/readonly/vendor/firmware/wlanmdsp.mbn`;
+  tqftpserv maps them into the directory the modem itself was loaded from (`/usr/lib/firmware/postmarketos/`), where the phone has `wlanmdsp.mbn` (sha256 4b1510cc..., byte-identical to the stock ROM's
+  modem/image/wlanmdsp.mbn, WLAN.HL.3.2.2-00993; `wlanmdsp.otaupdate` is a dangling symlink to /data/vendor/firmware/). Its atime is 1 s after modem.mdt's, i.e. it is served at modem boot, minutes before
+  ath10k is loaded by hand. So the 119 is NOT a race and NOT a missing/mismatched wlanmdsp: the WLFW service only exists once that image runs, ind_register/msa_info/msa_ready are answered by it, and the cap
+  rejection is produced by the image's own power-up routine (see the decompilation notes above). (The pmbootstrap rootfs chroot has a DIFFERENT wlanmdsp.mbn, sha256 5b426fc0...; not what the phone runs.)
+- **Community PMU/pwrseq test (2026-11-26): no change.** The 7.4-rc4 kernel already has `pwrseq-qcom-wcn` (WCN3990/3998, VDD_IO first, XO/RF/CH0/CH1, 50 ms) and ath10k_snoc pwrseq support, as used by the
+  SDM845/SM8150 boards. The DTS now has a `qcom,wcn3990-pmu` node (vddio L10a, xo L1c, rf L2c, ch0 L10c, ch1 L11c) and the wifi node takes its supplies from it. On hardware (stock ath10k modules, no patch):
+  still `capability req rejected: 119`. The sw-ctrl GPIO of this SoC family was not found (sm7125 tree 403, sm7150 tags too old), the driver does not read swctrl-gpios. The test DTB (wifi node `okay`) is
+  what boot_b holds; the repo DTS keeps the PMU node with the wifi node disabled.
+- **WI-FI, SESSION 2026-11-26 (all tested on hardware; every one still ends in `capability req rejected: 119`):**
+  GPIO 98 `cnss-wlan-en` hogged high from boot (it reads LOW otherwise; stock DT and the violet port drive it high; hog in the repo DTS now); WCN rails always-on at violet's voltages (LPM) - reverted, no effect;
+  community PMU/pwrseq node (`qcom,wcn3990-pmu`, kept in the DTS); `VBATT_REQ` (QMI 0x32, one TLV 0x01 u64 uV) sent from a QRTR client BEFORE ath10k connects at 4.46 V and 3.9 V: the firmware answers success,
+  cap still 119 (so the handler's stored level is not what rejects it); ath10k waiting for `MSA_READY_IND` before the cap request (`mainline/wip/0016`, like cnss-daemon): the indication is already there 15 us after
+  the msa_ready response, still 119. The cap request is answered after a repeatable ~200 ms (first WLAN-process instance after boot) / ~420 ms (later instances), i.e. the firmware times out waiting for something
+  in its power-up and rejects the request. CORRECTION: the WLFW thread is NOT wedged afterwards (BDF download and cal report are answered ~6 ms after the rejection); my earlier 'wedge' reading came from a test
+  client stalling in the kernel's QRTR TX flow control. wlan_process is killed ~9.4 s later ('EF:wlan_process:0x1:qmi_platform:0x9b:cmnos_thread.c:400'); a plausible (UNVERIFIED) reason is a firmware watchdog waiting for the host's
+  WLAN_MODE/config requests, which ath10k never sends once the capability request failed, so the crash is probably a consequence, not the cause.
+  After the failed cap the firmware DOES accept BDF download and cal report (debug_mask=0x300000 shows `qmi bdf download request completed`, `qmi cal report request completed`).
+  Debug recipe: `modprobe ath10k_core debug_mask=0x00300000` before `modprobe ath10k_snoc`.
+- **Cap request internals + last experiments (2026-11-26):** disassembly (llvm-objdump-18 on the carved wlanmdsp LOAD segment) shows the cap handler sets `r2 = #0x77` whenever the platform init FUN_b01c15b0 returns non-zero:
+  119 is a CONSTANT meaning 'WLAN platform init failed', not a deeper status. ath10k `wip/0017` (wait for MSA_READY_IND, keep MSA permissions on cap failure, resend the cap request 3x after BDF+cal): the retried cap request
+  gets NO reply at all (ath10k blocks in qmi_txn_wait) until wlan_process is killed ~9.4 s after the first rejection, i.e. the init cannot be re-run after it failed once, and BDF-before-cap is NOT the missing prerequisite.
+  Only the first rejection (~200 ms after the request) carries information. Next, if continued: find the ~200 ms wait inside FUN_b01c15b0 (suspects: ccvs/pwr requests FUN_b0147d50 / FUN_b01478e8 states 6 and 7, RFA/WSI reset,
+  WCSS clock measure) with the REA/llvm-objdump recipe above.
+- **Host capability sweep (2026-11-26, `mainline/wip/0018`, live-tunable `/sys/module/ath10k_snoc/parameters/hostcap_mode`: 1 skip the request as stock icnss does, 2 daemon_support=1, 4 bdf_support, 8 cal_filesys_support,
+  16 cal_done=0, 28/30 combinations as the ginkgo port): EVERY setting, and the default, still ends in `capability req rejected: 119` (0.2-0.45 s after the request). What the host says in the host-cap message is NOT the cause.
+  Also negative: exact stock GPIO98 pinctrl state (out high, pull-up, 16 mA, now in the DTS bound to remoteproc_mpss). Stock icnss source (xiaomi-sdm678/android_kernel_xiaomi_mojito @4f60b376): no GPIO/pinctrl at all, powers the
+  rails only AFTER the WLFW server arrives (before ind_register), cx-mx 640 mV via qcom,vdd-cx-mx-config, ch0/ch1 3.312 V, no host cap, no cold-boot-cal handling (that is the separate cnss-daemon).
+- **Firmware-build swap (2026-11-26):** the modem reads `/usr/lib/firmware/postmarketos/wlanmdsp.mbn` at MODEM BOOT only (swapping the file while the WLAN process restarts changes nothing; a reboot is needed). A corrupted file
+  (first 4 KB zeroed) gives no WLFW service and the modem crashes ~50 s after boot, so the file really is what the modem runs. The older same-line build `WLAN.HL.3.2.2-00715` (the copy in the pmbootstrap rootfs chroot,
+  sha256 5b426fc0...) fails IDENTICALLY (`capability req rejected: 119`, ~0.2 s), so the rejection is not specific to the -00993 build. Original restored on the phone (`wlanmdsp.mbn.orig` kept next to it).
+  Fast test loop that worked: swap/load, reboot, poll ssh + a QRTR WLFW lookup (service 69) instead of fixed sleeps: reboot to result takes ~40 s; module parameters can be changed live between WLAN-process restarts.
+- **violet startup-script comparison (2026-11-26; phone/violet-modem.initd, phone/rmtfs.initd in VipinVIP/violet-sm6150-mainline):** violet runs `rmtfs -o /var/lib/rmtfs` (file storage that accepts writes, seeded with dd from modemst1/modemst2/fsg),
+  starts tqftpserv + rmtfs first and the modem (`echo start > remoteproc/state`) afterwards, retries stop/start up to 4x. OUR phone ran `rmtfs -s -P -r` (partitions, READ-ONLY, modem writes dropped; from /etc/conf.d/rmtfs
+  `rmtfs_avoid_writing="true"`). Tested: `rmtfs -s -o /var/lib/rmtfs` writable, files seeded from ~/.claude-work/pmos-mojito/efs-backup-2026-11-26/*.img (the modem DID write modem_fs1/fs2) -> still `capability req rejected: 119`.
+  Config now violet-style (`/etc/conf.d/rmtfs`: rmtfs_files_path=/var/lib/rmtfs, avoid_writing=false; original saved as rmtfs.pmos-default). Modem stop/start with IPA loaded: the modem dies 40 s later
+  (`DOG detects stalled initialization`) and recovery never completes (IPA does not re-handshake): do not restart the modem without rebooting. Boot order on our phone is already tqftpserv -> rmtfs (-s starts the modem at ~8.2 s).
+  Hazards learned: `dd`/`head` reads of /dev/disk/by-partlabel/modemst* hang in the kernel (D state, unkillable, `sync` then hangs; recover with `echo b > /proc/sysrq-trigger`); reading the modem carve-out
+  (0x8b000000, 132 MB) via /dev/mem hangs the reading CPU (RCU stall) - violet's RULED-OUT says the same ('reads of the modem carve-out reset the SoC'): a pre-shutdown memory capture is NOT possible.
+- **Android reference (stock vendor.img, `debugfs -R "rdump /etc/init ." vendor_a.img`, no root needed):** starts qrtr-ns, pd-mapper, pm-service/pm-proxy (peripheral manager, only AP-side voting), tftp_server, rmt_storage (modemst1/modemst2/fsg/fsc,
+  same as rmtfs), cnss-daemon (a second WLFW client: waits for MSA ready, cold-boot cal, BDF update by ro.boot.hwversion), `insmod qca_cld3_wlan.ko`; the hardware is called HELIUM (`cnss_diag -t HELIUM`). The kernel pd-mapper table matches the stock
+  modemr.jsn/modemuw.jsn (wlan_pd: elf_loader, servreg, wlan/fw, instance 180). Nothing there feeds the modem's cap handler.
+- **Slot A (vendor 4.14) as an A/B:** the modem boots via `/dev/subsys_modem` (PAS path, no mba needed; `rc-service rmtfs start` first), then dies after ~40 s with `DOG detects stalled initialization` because `ipa_fws` is not up;
+  opening `/dev/subsys_ipa_fws` made the phone reset twice with NO kernel message (hard reset; /var/log is persistent there, `dmesg` snapshots every second showed nothing). No Wi-Fi data from slot A; do not repeat without a new idea.
+- **violet-sm6150-mainline (github.com/VipinVIP/violet-sm6150-mainline) check:** its Wi-Fi node/modem node/smp2p/IPA match ours; `violet-vbat.c` is a battery-gauge driver (NOT a WLFW tool); its patches 0010/0015 act after the handshake. Qualcomm's qcom-deb-images issue #667
+  (RB1, WCN3950, kernel 7.2) shows the same `capability req rejected: 119` intermittently (1 in 100), open, no cause.
+- **Still unknown:** what the modem's WLAN power-up waits ~200 ms for. Needs the modem's own log or a different angle (e.g. memory capture before `qcom_pas_shutdown`, risky).
 - sm7125-mainline (Redmi Note 9 Pro, same PMICs, same `wlan_mem` 0x93900000, Wi-Fi works, unpatched ath10k): 2 MB MSA +
   `qcom,msa-fixed-perm` + ch1 = L11c. With that config here: boots fine, MSA permission errors gone, still 119. The repo DTS now uses it.
 - Stock node also has `qcom,smmu-s1-bypass` and iova ranges (matters for data path later, not for the handshake).

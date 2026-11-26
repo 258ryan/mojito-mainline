@@ -1,0 +1,90 @@
+From: postmarketOS mojito port
+Subject: [PATCH] wifi: ath10k: qmi: EXPERIMENT, wait for MSA ready, keep MSA permissions, retry cap after BDF+cal
+
+Diagnostic only (includes wip/0016). Keeps the MSA permissions when the capability request fails and resends the
+capability request three times after the board data download and the calibration report. NOT for upstream.
+---
+--- a/drivers/net/wireless/ath/ath10k/qmi.c	2026-11-23 03:57:40.000000000 +0500
++++ b/drivers/net/wireless/ath/ath10k/qmi.c	2026-11-26 19:43:28.182284604 +0500
+@@ -845,13 +845,27 @@
+ 	if (ret)
+ 		return;
+ 
++	reinit_completion(&qmi->msa_ready_comp);
++
+ 	ret = ath10k_qmi_msa_ready_send_sync_msg(qmi);
+ 	if (ret)
+ 		goto err_setup_msa;
+ 
++	/*
++	 * Like the downstream cnss-daemon, wait for the firmware's MSA ready
++	 * indication before asking for the capabilities. SM6150 modem firmware
++	 * (WLAN.HL.3.2.2) powers the WLAN block up inside the capability request
++	 * and rejects it with error 119 while its own MSA bring-up is still running.
++	 */
++	if (!wait_for_completion_timeout(&qmi->msa_ready_comp,
++					 msecs_to_jiffies(3000)))
++		ath10k_warn(ar, "no MSA ready indication within 3 s, sending the capability request anyway\n");
++	else
++		ath10k_dbg(ar, ATH10K_DBG_QMI, "msa ready indication received before the capability request\n");
++
+ 	ret = ath10k_qmi_cap_send_sync_msg(qmi);
+ 	if (ret)
+-		goto err_setup_msa;
++		ath10k_warn(ar, "EXPERIMENT: capability request failed (%d), keeping the MSA permissions\n", ret);
+ 
+ 	return;
+ 
+@@ -917,7 +931,8 @@
+ 
+ static void ath10k_qmi_event_msa_ready(struct ath10k_qmi *qmi)
+ {
+-	int ret;
++	struct ath10k *ar = qmi->ar;
++	int ret, i;
+ 
+ 	ret = ath10k_qmi_fetch_board_file(qmi);
+ 	if (ret)
+@@ -929,6 +944,15 @@
+ 
+ 	ret = ath10k_qmi_send_cal_report_req(qmi);
+ 
++	/* EXPERIMENT: does the firmware accept the capability request once it has the board data? */
++	for (i = 0; i < 3; i++) {
++		msleep(i ? 500 : 50);
++		ret = ath10k_qmi_cap_send_sync_msg(qmi);
++		ath10k_warn(ar, "EXPERIMENT: capability retry %d after bdf+cal: %d\n", i, ret);
++		if (!ret)
++			break;
++	}
++
+ out:
+ 	return;
+ }
+@@ -958,6 +982,7 @@
+ {
+ 	struct ath10k_qmi *qmi = container_of(qmi_hdl, struct ath10k_qmi, qmi_hdl);
+ 
++	complete(&qmi->msa_ready_comp);
+ 	ath10k_qmi_driver_event_post(qmi, ATH10K_QMI_EVENT_MSA_READY_IND, NULL);
+ }
+ 
+@@ -1095,6 +1120,8 @@
+ 	if (of_property_read_bool(dev->of_node, "qcom,no-msa-ready-indicator"))
+ 		qmi->no_msa_ready_indicator = true;
+ 
++	init_completion(&qmi->msa_ready_comp);
++
+ 	ret = qmi_handle_init(&qmi->qmi_hdl,
+ 			      WLFW_BDF_DOWNLOAD_REQ_MSG_V01_MAX_MSG_LEN,
+ 			      &ath10k_qmi_ops, qmi_msg_handler);
+--- a/drivers/net/wireless/ath/ath10k/qmi.h	2026-11-23 03:57:40.000000000 +0500
++++ b/drivers/net/wireless/ath/ath10k/qmi.h	2026-11-26 19:37:24.416838718 +0500
+@@ -108,6 +108,7 @@
+ 	struct ath10k_qmi_cal_data cal_data[MAX_NUM_CAL_V01];
+ 	bool msa_fixed_perm;
+ 	bool no_msa_ready_indicator;
++	struct completion msa_ready_comp;
+ 	enum ath10k_qmi_state state;
+ };
+ 

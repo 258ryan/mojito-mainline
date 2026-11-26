@@ -1,0 +1,61 @@
+From: postmarketOS mojito port
+Subject: [PATCH] wifi: ath10k: qmi: EXPERIMENT, runtime-tunable host capability request (hostcap_mode)
+
+Diagnostic only: /sys/module/ath10k_snoc/parameters/hostcap_mode bits: 1 skip the request (stock icnss sends none), 2 daemon_support=1,
+4 bdf_support=1, 8 cal_filesys_support=1, 16 cal_done=0 (4/8/16 as the ginkgo port). NOT for upstream.
+---
+--- a/drivers/net/wireless/ath/ath10k/qmi.c	2026-11-23 03:57:40.000000000 +0500
++++ b/drivers/net/wireless/ath/ath10k/qmi.c	2026-11-26 20:03:26.845761423 +0500
+@@ -650,6 +650,15 @@
+ 	return ret;
+ }
+ 
++/*
++ * EXPERIMENT (runtime tunable): what the host tells the SM6150 WLAN firmware in the host capability request.
++ * bit0 skip the request (stock icnss sends none), bit1 daemon_support=1 (Android's cnss-daemon),
++ * bit2 bdf_support=1, bit3 cal_filesys_support=1, bit4 cal_done=0 (explicit); the last three as the ginkgo port.
++ */
++static int ath10k_qmi_hostcap_mode;
++module_param_named(hostcap_mode, ath10k_qmi_hostcap_mode, int, 0644);
++MODULE_PARM_DESC(hostcap_mode, "EXPERIMENT: host capability bits (1 skip, 2 daemon, 4 bdf, 8 cal_filesys, 16 cal_done=0)");
++
+ static int ath10k_qmi_host_cap_send_sync(struct ath10k_qmi *qmi)
+ {
+ 	struct wlfw_host_cap_resp_msg_v01 resp = {};
+@@ -661,7 +670,20 @@
+ 	int ret;
+ 
+ 	req.daemon_support_valid = 1;
+-	req.daemon_support = 0;
++	req.daemon_support = (ath10k_qmi_hostcap_mode & 2) ? 1 : 0;
++	if (ath10k_qmi_hostcap_mode & 4) {
++		req.bdf_support_valid = 1;
++		req.bdf_support = 1;
++	}
++	if (ath10k_qmi_hostcap_mode & 8) {
++		req.cal_filesys_support_valid = 1;
++		req.cal_filesys_support = 1;
++	}
++	if (ath10k_qmi_hostcap_mode & 16) {
++		req.cal_done_valid = 1;
++		req.cal_done = 0;
++	}
++	ath10k_warn(ar, "EXPERIMENT: host capability mode %d\n", ath10k_qmi_hostcap_mode);
+ 
+ 	ret = qmi_txn_init(&qmi->qmi_hdl, &txn, wlfw_host_cap_resp_msg_v01_ei,
+ 			   &resp);
+@@ -824,10 +846,13 @@
+ 	 * Skip the host capability request for the firmware versions which
+ 	 * do not support this feature.
+ 	 */
+-	if (!test_bit(ATH10K_SNOC_FLAG_SKIP_HOST_CAP_QUIRK, &ar_snoc->flags)) {
++	if (!test_bit(ATH10K_SNOC_FLAG_SKIP_HOST_CAP_QUIRK, &ar_snoc->flags) &&
++	    !(ath10k_qmi_hostcap_mode & 1)) {
+ 		ret = ath10k_qmi_host_cap_send_sync(qmi);
+ 		if (ret)
+ 			return;
++	} else {
++		ath10k_warn(ar, "EXPERIMENT: host capability request skipped (mode %d)\n", ath10k_qmi_hostcap_mode);
+ 	}
+ 
+ 	ret = ath10k_qmi_msa_mem_info_send_sync_msg(qmi);
