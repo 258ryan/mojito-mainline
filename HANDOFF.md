@@ -3,6 +3,35 @@
 For the next agent picking this up. Read the START HERE section, then the rest as needed, before touching the phone.
 State as of 2026-11-27 (Wi-Fi work 2026-11-26/27).
 
+## *** 2026-11-27: Wi-Fi cause found on stock; fix NOT yet verified on pmOS (read this first) ***
+
+Controlled tests on stock MIUI (same phone, recorder kernel, one change per boot) showed the WLAN capability request depends on the **ADSP sensor PD file server**:
+
+| ADSP | `adsprpcd` instances | capability reply |
+|---|---|---|
+| not running | - | **error 119** after ~200 ms (twice) |
+| running | all three | success, ~44 ms |
+| running | none | **119** (twice) |
+| running | `audiopd` only | **119** |
+| running | **`sensorspd` only** | **success** |
+| running | default (no argument) only | **119** |
+
+- Not required: `cnss-daemon` and 20 other modem-facing Android programs (all blocked together: still success). Not the cause: the ADSP firmware
+  build (the pmOS package's `ADSP.VT.5.3-00316` also succeeds on stock; the phone ships `-00323`). The kernel version was already ruled out.
+- **Plan on pmOS:** run `hexagonrpcd -f /dev/fastrpc-adsp -d adsp -s -R <dir>` (Alpine `community`, 0.4.0), like postmarketOS's miatoll port
+  (`hexagonrpcd-adsp-sensorspd`), with this phone's sensor files, then load `ath10k_snoc`.
+  Layout of `<dir>` (here `/usr/share/qcom/sm6150/Xiaomi/mojito`): `sensors/config` = `/vendor/etc/sensors/config`,
+  `sensors/registry` = `/mnt/vendor/persist/sensors/registry/registry`, `sensors/sns_reg.conf` = `/vendor/etc/sensors/sns_reg_config`,
+  `dsp/adsp` = `/vendor/dsp/adsp` + `/vendor/lib/rfsa/adsp`, `socinfo/` files: soc_id 355, revision 1.1, hw_platform IDP,
+  platform_subtype Unknown, platform_subtype_id 0, platform_version 65536. These are vendor/device files: **not in this repo**.
+- 7.4 creates only `/dev/fastrpc-adsp-secure` here (the DT node lacks `qcom,non-secure-domain`): pass that device to `-f`, or add the
+  property as sm7125-mainline does for sc7180.
+- Recording method, tools and the recorder kernel recipe: `mainline/wip/wlan-re/stock-capture/`.
+
+**Phone state:** stock was recorded, then pmOS was restored from the PC backup (slot A downstream, slot B = 7.4 with the Wi-Fi-enabled test DTB
+without L10a always-on). The backup restore needs `depmod 7.4.0-rc4-sm6150` and `rc-update -u`; after the first boot modules loaded only after
+`udevadm trigger --action=add` (recheck). `hexagonrpcd` and the sensor files are installed; **the Wi-Fi test has not run yet**.
+
 ## START HERE (2026-11-26, end of session): where things stand
 
 > **2026-11-27, read first:** a second Wi-Fi session ("Wi-Fi: second session" below) exhausted the mainline ideas. The user then chose to restore
@@ -796,7 +825,7 @@ Do not read `/sys/kernel/debug/gpio` on slot A from that probe: the phone reset 
 arduino/arduino-deb-images#23 (UNO Q, every boot, BT silent too). On an Arduino forum thread a board replacement fixed it. This phone's radios work
 under stock MIUI, so the hardware is fine.
 
-**Never captured on stock** (do it before wiping Android again): QMI message contents including the successful capability exchange, the QRTR service
+**Captured later the same day (see the top section); at the time of this session still missing:** QMI message contents including the successful capability exchange, the QRTR service
 list from boot, the modem's file requests from boot, logcat from the first second. Stock kernel 4.14.190 has no kprobes, syscall tracing or IPC logging
 and forces module signatures, so the plan is a rebuilt kernel (Xiaomi `mojito-r-oss`, stock config) with `qrtrcap/` added. Not yet built or proven.
 

@@ -10,4 +10,4 @@ Results are in HANDOFF.md, "Wi-Fi: second session". No firmware, dumps or logs h
 | `btprobe-downstream.py` | slot A: power through rfkill `bt_power`, ask the chip for its version |
 | `kernel-7.2.10/mojito-on-7.2.10.patch` | the packaged patches rebased on linux 7.2.10 (built on a PC with `make LLVM=1`) |
 | `dts/*.dtsi` | fragments appended to the board DTS for each test image |
-| `qrtrcap/` | recorder for every QRTR packet (`/proc/qrtrcap`) on a 4.14 downstream kernel, and its decoder. Compiles for `net/qrtr/`; **not yet run on hardware** |
+| `qrtrcap/` | recorder for every QRTR packet (`/proc/qrtrcap`) on a 4.14 downstream kernel, and its decoder. Used on stock MIUI, see `stock-capture/` |
