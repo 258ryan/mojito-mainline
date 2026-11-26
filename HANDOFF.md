@@ -728,7 +728,10 @@ Later tests (2026-11-26 evening):
   `mainline/wip/wlanpdr/` (pdr_add_lookup("wlan/fw", "msm/modem/wlan_pd"), loaded at boot via /etc/modules before the modem starts): UNINIT at modem
   boot, UP indication trans-id 1 received and ACKed, DOWN/UP on every crash also ACKed - and the cap request still gets 119. The module stays installed
   (/lib/modules/7.4.0-rc4-sm6150/updates/wlanpdr.ko, listed in /etc/modules); a real ath10k fix will want PDR anyway.
-  => The difference is on the MODEM side, not in anything the AP drives: same wlanmdsp.mbn, but the modem image/config, EFS, or the services the modem talks
+  **Not yet compared against MIUI (only the pmOS side exists):** the QRTR/QMI service list (pmOS: `qrtr-lookup`) and the modem's tftp/rmtfs file
+  requests (pmOS logs in modem-requests-pmos/; MIUI's early-boot logcat had rotated out of the dumps). Both need a MIUI boot with logcat captured from
+  the first second (plus a static aarch64 qrtr-lookup or equivalent). Until then "AP-side parity" covers only what is listed in (A)-(G).
+  => The difference is probably on the MODEM side, not in anything the AP drives that was compared above: same wlanmdsp.mbn, but the modem image/config, EFS, or the services the modem talks
   to differ between MIUI and pmOS. Next: compare the QMI/QRTR service list and the modem's tftp/rmtfs file requests under MIUI vs pmOS, and the modem firmware
   files actually loaded (MIUI loads them from /vendor/firmware_mnt, pmOS from /lib/firmware/postmarketos: compare checksums of modem.* and the mcfg/mbn set).
 - **Firmware RE of the capability path (2026-11-27, wlanmdsp.mbn 4b1510cc, llvm-objdump-18 recipe above; addresses are absolute):**
