@@ -22,7 +22,8 @@ DTS bound to remoteproc_mpss), the upstream WCN3990 PMU/pwrseq node, always-on r
 `qcom,msa-fixed-perm`; the DTS now has none, like stock icnss and violet), host-capability message contents (live tunable `mainline/wip/0018`),
 `VBATT_REQ`, waiting for `MSA_READY_IND`, board data before the capability retry, an older firmware build (`HL.3.2.2-00715`), writable file-based
 rmtfs like violet. The violet port (Redmi Note 7 Pro, same SoC, Wi-Fi works) has the same device tree and services as far as read. **Open question:
-what the ~200 ms wait inside the modem's first power-up is.** The modem's memory and log are NOT readable (below), so the remaining ideas are:
+what the ~200 ms wait inside the modem's first power-up is** (newest lead, unproven: the RF crystal enable over WSI fails; see "CORRECTION and new
+lead" in the Wi-Fi section). The modem's memory and log are NOT readable (below), so the remaining ideas are:
 (1) compare against a phone state where Wi-Fi works: boot stock Android with root and dump GPIO/regulator/clock/pinctrl state, diff against ours
 (**back up `userdata` first: our rootfs is a loop file inside it**); (2) a full violet-parity image (direct supplies, no ch1, always-on LPM rails, no
 PMU) - parts of it were tested separately; (3) keep reading the firmware (recipe in the Wi-Fi section) for the wait.
@@ -746,12 +747,29 @@ Later tests (2026-11-26 evening):
     only if the global **0xb0300ac0 == 1**. `b0147d50`: returns 0xd ("CCPM not initialized", plain string at 0xb02a4381) if byte **0xb03200a0** is 0, otherwise
     builds a request from the state table at 0xb031a740 and calls `b01479a4` under a lock (`b02122e8`/`b02122f0`).
   - **`b014ada0` is the CCPM client-init routine** (its tail writes 0xb0300ac0 = 1 at 0xb014b028): loops 7 table entries (`b0147370`), clears bit 0 of
-    **0xa67c0000**, waits 200, then `b0145e40`, `b0145db0`, `b0147550`, `b0146400` (returns 5 = early exit) ... On mainline this init evidently never completes.
-  - Log text is QShrink-hashed (F3 descriptors {line|ssid, mask, hash}); only assert strings are plain (e.g. "platform_helium_init.c:Invalid HW variant",
-    "ccpm_ccvs_plat_req from wrong platform client", "ccpm_mgr_deinit").
-  - **Next RE step:** find who calls `b014ada0`'s caller `0xb0148bdc(obj, state==1)` through the ops table (`ops+0x38`), and what event/signal drives the CCPM
-    state machine to state 1 (the earlier finding: walkers at 0xb01476d8 / 0xb0149138). Also decode `b01479a4` / `b014a820` for the timed wait (look for
-    calls taking a timeout argument right before an error return).
+    **0xa67c0000**, waits 200, then `b0145e40`, `b0145db0`, `b0147550`, `b0146400` (returns 5 = early exit) ... (The earlier claim that this init
+    "never completes" on mainline was wrong; see the correction below.)
+  - F3 log text is QShrink-hashed (descriptors {line|ssid, mask, hash}), but assert strings and many CCPM log strings are plain
+    (e.g. "platform_helium_init.c:Invalid HW variant", "ccpm_rf_xo_enable: ...").
+- **CORRECTION and new lead (2026-11-27, static reading only, nothing run on the phone): the RF crystal enable probably fails.**
+  - The flag **0xb0300ac0 is 1 in the firmware image** (data segment). One direct read (0xb0147964) and one direct write (0xb014b028) were found;
+    pointer-based writes are not excluded. That write stores 1 when client-init completes and **0 on the early exit** at 0xb014ae38, taken when
+    `b0146400` returns 5. So B/C do not need the init to have run; they fail if it ran and took that exit.
+  - `b0146400` is **`ccpm_rf_xo_enable`** (its log strings). It returns 5 when "step 12: Wait WSI_CMD.RF_CMD_IP bit 31 to be 0"
+    (register 0xfc0800e0 in the firmware's address space) is still busy after 5 retries; the success path returns the xo_type. It also logs
+    WLAN_SW_CTRL_GPIO before and after the XO command.
+  - A (`b0147d50` -> `b01479a4` -> `b014a8c0`) returns 0 on every path read once CCPM is initialised. It applies resource mask 0x802 (ids 1, 11).
+  - **Inference (not proven):** the 119 is exit B or C after `ccpm_rf_xo_enable` failed. This would fit the silent Bluetooth core (radio chip not answering).
+  - CCPM resources (table 0xb03010c8, 0x18 each; id = byte at +4, subtype = next byte): 1 /icb/arbiter (sub 1), 2 wcn_ant_switch, 3 cpu latency,
+    4 wcn_core, 6 wcn_pa, 7 wcn_pa_2, 8 wcss, 11 ccpm_mca (sub 3), 12 **adrastea_clk** (sub 6), 13 /icb/alc (sub 7), 14, 15, 17.
+    Callbacks are installed by subtype (jump table 0xb02a4698). Only sub 6 gets node+0x38 = `b0148bdc` (value == 1 -> `b014ada0`).
+  - `b01478e8` -> `b014a820` -> walker `b0147670` (holds 0xb01476d8). The walker filters by resource-id bit (state 6: mask 5; state 7: mask 2) and skips
+    nodes without a callback at +0x34 (only subs 1, 3, 7 have one). So B appears to do nothing (id 0 is not in that table, id 2 has no such callback);
+    C reaches /icb/arbiter, which makes C the likelier failing exit. Resources are then applied by mask: `b014787c` -> `b0149070` / `b0149110`.
+  - **Open (weak link):** what puts bit 12 (adrastea_clk) into an apply mask with value 1 on this path. If client-init never runs, B and C should
+    succeed. Also open: whether the delays explain ~200 ms (step 12 alone is 5 x 6 x `b003b4d8(1000)`, ~30 ms if the unit is us).
+  - **Next:** (1) on the phone, sample TLMM gpio102 (SW_CTRL) rapidly across the capability request; a change or none is a clue, not proof;
+    (2) trace the adrastea_clk apply path and the WSI test routine ("ccpm_rfactrl_wsi_test").
 - **Still unknown:** what the modem's WLAN power-up waits ~200 ms for. Needs the modem's own log or a different angle (e.g. memory capture before `qcom_pas_shutdown`, risky).
 - sm7125-mainline (Redmi Note 9 Pro, same PMICs, same `wlan_mem` 0x93900000, Wi-Fi works, unpatched ath10k): 2 MB MSA +
   `qcom,msa-fixed-perm` + ch1 = L11c. With that config here: boots fine, MSA permission errors gone, still 119. The repo DTS now uses it.
