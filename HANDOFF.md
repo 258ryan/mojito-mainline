@@ -705,6 +705,7 @@ Later tests (2026-11-26 evening):
   (A) Wi-Fi node on direct rails like stock icnss (`mainline/wip/wifi-lpm-test.dtsi`: no PMU node, no ch1, L9a 640 mV, L10c 3.312 V, L1c/L2c/L10c/L9a
   `regulator-initial-mode` LPM; PMIC confirms mode 0x04 = LPM and all enabled), rails switched on by ath10k only after the WLFW service exists (like Android);
   (B) `mainline/wip/0019` (`pre_bdf=1`): the firmware REFUSES regdb.bin and board data before the capability request (QMI error 90, incompatible state), so
+  (B2) `pre_bdf=3` (only the calibration report before cap, like cnss-daemon's cal table at +7 ms): also refused (-22); the cap request is the gate, no WLFW step is accepted before it.
   on Android the cap request must already succeed within ~60 ms of QMI connect (cnss-daemon's BDF at +63 ms); (C) every PMIC RF/LN clock voted on via rpmhvote
   (RF1, RF2, RF3, LN_BB2, LN_BB3 all EN=0x80 / OK) during the WLAN restarts. The Android trace shows nothing else from the AP in that window (only the 4 rail
   votes, 2x SCM hyp-assign, IRQs from smp2p/glink). RB1 (WCN3950, qrb2210-rb1.dts, works upstream) uses plain PMU rails and no clock either.
