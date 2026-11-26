@@ -3,7 +3,7 @@ maintainer=""
 _flavor="postmarketos-qcom-sm6150"
 pkgname=linux-$_flavor
 pkgver=7.4_rc4
-pkgrel=6
+pkgrel=12
 pkgdesc="Mainline kernel for SM6150 devices"
 arch="aarch64"
 _carch="arm64"
@@ -35,6 +35,9 @@ source="
 	0002-firmware-qcom-tzmem-do-not-use-the-SHM-bridge-on-sm6150.patch
 	0003-interconnect-qcom-qcs615-add-the-ACV-enable-mask.patch
 	0004-Input-edt-ft5x06-read-all-10-points-on-the-FT5452.patch
+	0005-drm-panel-add-the-Xiaomi-Redmi-Note-10-mojito-k7-AMOLED-panel.patch
+	0006-iommu-arm-smmu-qcom-use-an-identity-domain-for-the-SM6150-MDSS.patch
+	0007-drm-msm-dpu-stop-the-bootloader-timing-engine-before-the-DSI-bring-up.patch
 "
 builddir="$srcdir/linux-${pkgver/_/-}"
 
@@ -73,9 +76,12 @@ package() {
 
 sha512sums="
 df2d9560c6da42cf3620d7abb6b4070c86165b46c6e686f94c4585fc3b887d30cc38550390b1be2dccdafe226ad60f1e5604c080853c25da618a74d38bb75c28  linux-postmarketos-qcom-sm6150-v7.4-rc4.tar.gz
-c90d396352859a5a4353e40aedd2f4028025864f592a16bc52dab5370806c6388c5c472d115ff6dd69cdfb45f4b95d1db188d1b5507db61fcbf07a90720bda14  config-postmarketos-qcom-sm6150.aarch64
-bacbd2d25803afe469d5aa2c2f0b3b6026cf3d9ce9efda6727beb17a991ae0085660f8d034f19e57f6ad9c598fd3d79043efd0ffdb82f91e1ec4380105a8bf68  0001-arm64-dts-qcom-add-xiaomi-mojito.patch
+24d077173644b55a40243dc75dced6fabb8946bf6b446fd5820f48c7f2286bf7798b9fdb4c1b3cfdcfeb34147ca34c6d55984671baeb3275b915504901d9eb99  config-postmarketos-qcom-sm6150.aarch64
+8e3fe027f208b44a29b9ecbfd74ba80e4fc0d61fbf0436630284b8b665c62f9a489aca7ec1ab9268d60bfaac4bf38fa0106153b36a5684e43d0cf9fd04859c3a  0001-arm64-dts-qcom-add-xiaomi-mojito.patch
 61202bda639a577e543975b72e66be7d0b49b0d2349b100fadfc9500e1c8059ef48b5156fa7b83a7eca41d9b87752d210ae1e0a400a68374b32a4f9446ce5a3e  0002-firmware-qcom-tzmem-do-not-use-the-SHM-bridge-on-sm6150.patch
 278eecc64de52cf3fb75be386f8a6f947e9cf2e6a63a311647d63aa7ae5b4578446630ea381bbd74d52184db2f40342cfaa152d1fbb1dfbf4f30d12e0b5bdd97  0003-interconnect-qcom-qcs615-add-the-ACV-enable-mask.patch
 4a0379e92816d74b57f94d14baecf51dff71b28f05d1f4d01c81bb01cec7745d2973cc9ba542308490c4cecb318d86f227717be341b1e4c8fed7a5480d0dbb07  0004-Input-edt-ft5x06-read-all-10-points-on-the-FT5452.patch
+bbae2fdf63ec9f8de7ec9eecdd77e82e610075ae51f8c046a14af7b50f8faddd06aff2cab64b183b82df2f2885769dda8b50b933ac1b2e0c34acf665d0eea5ed  0005-drm-panel-add-the-Xiaomi-Redmi-Note-10-mojito-k7-AMOLED-panel.patch
+0b0e4203e3362e82aa3a0ed46fa2b16ce927f32e3b7b1cb345da83cf7e2553d1706e78339849785294779acdfa86dceb3bf3ea6df9cd5d7f936f7a07ad21a839  0006-iommu-arm-smmu-qcom-use-an-identity-domain-for-the-SM6150-MDSS.patch
+13f3830638290e112f2fd25e649edffd8814c81cfba1bf5c90c2ff5114272dd2dfae20f032f910f02b82f3209026188d60a2cef6aaa74275f58019d31f680485  0007-drm-msm-dpu-stop-the-bootloader-timing-engine-before-the-DSI-bring-up.patch
 "

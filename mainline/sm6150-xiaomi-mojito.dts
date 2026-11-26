@@ -45,22 +45,14 @@
 			reg = <0x0 0x9c000000 0x0 (1080 * 2400 * 4)>;
 			memory-region = <&cont_splash_mem>;
 			/*
-			 * Without a consumer, genpd sync_state powers mdss_core_gdsc off about 6 s after boot
-			 * (pd_ignore_unused does not stop that path) and the panel shows noisy green.
+			 * Deliberately NO power-domains and NO clocks here, although holding MDSS_CORE_GDSC and the display
+			 * clocks keeps the splash alive until msm loads. The bootloader leaves its splash pipeline running and
+			 * the DPU's CTL stuck in a hardware reset (it never accepts a frame: "hw recovery is not complete for
+			 * ctl:1", blue screen); only a power cycle of the display core clears that, and holding the domain on
+			 * means it is never cycled. Without the hold, genpd collapses MDSS_CORE_GDSC once nothing uses it
+			 * and msm powers it up fresh, which works. Cost: a few seconds of green/black between the splash and
+			 * the first real frame. An mdss "resets" line (DISP_CC_MDSS_CORE_BCR) hangs the phone at probe.
 			 */
-			power-domains = <&dispcc MDSS_CORE_GDSC>;
-			/*
-			 * Hold the display clocks the bootloader left running. Without a reference the display
-			 * clock controller's sync_state/cleanup lets the pipeline die (panel black). byte0 and
-			 * pclk0 report 0 Hz (their DSI PLL parent is registered by msm.ko) and are only gated on,
-			 * which is already their hardware state, so the bootloader's pixel timing is untouched.
-			 */
-			clocks = <&dispcc DISP_CC_MDSS_AHB_CLK>,
-				 <&dispcc DISP_CC_MDSS_MDP_CLK>,
-				 <&dispcc DISP_CC_MDSS_VSYNC_CLK>,
-				 <&dispcc DISP_CC_MDSS_ESC0_CLK>,
-				 <&dispcc DISP_CC_MDSS_BYTE0_CLK>,
-				 <&dispcc DISP_CC_MDSS_PCLK0_CLK>;
 			width = <1080>;
 			height = <2400>;
 			stride = <(1080 * 4)>;
@@ -579,3 +571,63 @@
 &pm6150_rtc {
 	status = "okay";
 };
+
+/*
+ * Display: the real MDSS/DPU/DSI stack. The panel is a Samsung-style 1080x2400 AMOLED in video mode
+ * (stock node qcom,mdss_dsi_k7_38_0c_0a_video); brightness is the DCS 0x51 command, which the panel driver
+ * exposes as a backlight. The bootloader leaves the lab/ibb (LCDB) bias rails on and nothing here controls
+ * them, so they are not listed. framebuffer0 stays until msm.ko takes the display over.
+ *
+ * Stock panel supplies: vddio = pm6150 L13 (1.8 V), vdda-3p3 = pm6150 L18 (3.0 V). The DSI host takes
+ * vdda-1p2 = pm6150L L3 and the PHY vdda-0p9 = pm6150 L4.
+ */
+&tlmm {
+	panel_reset_default: panel-reset-default-state {
+		pins = "gpio91";
+		function = "gpio";
+		drive-strength = <8>;
+		bias-disable;
+	};
+};
+
+&mdss {
+	status = "okay";
+};
+
+&mdss_mdp {
+	status = "okay";
+};
+
+&mdss_dsi0 {
+	vdda-supply = <&vreg_l3c>;
+	status = "okay";
+
+	panel@0 {
+		compatible = "xiaomi,mojito-k7-panel";
+		reg = <0>;
+
+		vddio-supply = <&vreg_l13a>;
+		vci-supply = <&vreg_l18a>;
+		reset-gpios = <&tlmm 91 GPIO_ACTIVE_LOW>;
+
+		pinctrl-0 = <&panel_reset_default>;
+		pinctrl-names = "default";
+
+		port {
+			panel_in: endpoint {
+				remote-endpoint = <&mdss_dsi0_out>;
+			};
+		};
+	};
+};
+
+&mdss_dsi0_out {
+	remote-endpoint = <&panel_in>;
+	data-lanes = <0 1 2 3>;
+};
+
+&mdss_dsi0_phy {
+	vdda-supply = <&vreg_l4a>;
+	status = "okay";
+};
+

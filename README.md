@@ -6,7 +6,7 @@ Two ports for the Redmi Note 10 (Qualcomm SM6150, Adreno 612):
   the panel via kmscon, touch, buttons, vibrator, flashlight, battery readouts. No audio, modem, Wi-Fi or GPU.
 - **`mainline/`** is in progress: Linux 7.4-rc4 with a new `sm6150-xiaomi-mojito.dts` on top of mainline's
   `talos.dtsi`. It boots to SSH and shows a login on the panel, the Adreno 612 renders through freedreno (off-screen), the
-  touchscreen works and Phosh runs; the goal is a KWin 6 / Qt 6 shell, which needs a real display driver next.
+  touchscreen works, the real display stack (DPU/DSI/panel with brightness control) works and Phosh runs; the goal is a KWin 6 / Qt 6 shell on it.
 
 Start with [`HANDOFF.md`](HANDOFF.md): status, every fix that was needed, the mainline boot experiments,
 next steps and the traps (read the NAT warning before giving the phone internet).

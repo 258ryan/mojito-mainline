@@ -1,0 +1,22 @@
+From: mojito-mainline <noreply@anthropic.com>
+Subject: [PATCH] iommu/arm-smmu-qcom: use an identity domain for the SM6150 MDSS
+
+The bootloader leaves the display scanning out of its splash buffer through
+the SMMU stream. Without an identity default domain the display stream is
+switched to an empty translation context at boot: every fetch faults
+(hundreds of thousands per second), the panel goes black and the DSI video
+engine underflows, so the panel driver cannot send its init sequence.
+Add qcom,sm6150-mdss to the list that already covers sm6115, sm6350, sm8150.
+
+Signed-off-by: mojito-mainline <noreply@anthropic.com>
+---
+--- a/drivers/iommu/arm/arm-smmu/arm-smmu-qcom.c	2026-11-26 12:36:59.717615046 +0500
++++ b/drivers/iommu/arm/arm-smmu/arm-smmu-qcom.c	2026-11-26 12:36:59.738562258 +0500
+@@ -421,6 +421,7 @@
+ 	{ .compatible = "qcom,sdm845-mdss" },
+ 	{ .compatible = "qcom,sdm845-mss-pil" },
+ 	{ .compatible = "qcom,sm6115-mdss" },
++	{ .compatible = "qcom,sm6150-mdss" },
+ 	{ .compatible = "qcom,sm6350-mdss" },
+ 	{ .compatible = "qcom,sm6375-mdss" },
+ 	{ .compatible = "qcom,sm8150-mdss" },

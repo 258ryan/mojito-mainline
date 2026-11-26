@@ -96,9 +96,10 @@ same layout as the stock kernel. The kernel package is `mainline/linux-postmarke
 
 Linux `7.4.0-rc4-sm6150` boots from a header v2 `boot.img` (see "Packaging the v2 boot image"; `dtbo_b` erased) to
 the pmOS rootfs on slot B and answers on SSH over USB. UFS, the USB gadget, the watchdog, the TLMM pin controller
-and simpledrm all probe; the log has no oops; the splash display and the kmscon login work; and the **Adreno 612
-renders** (freedreno, OpenGL ES 3.2, off-screen test passes). Open: a real display driver (DPU/DSI/panel), touch,
-audio, Wi-Fi, modem, charging. Eight GPIOs are secure-world owned and reserved in the DTS (see TLMM).
+all probe; the **real display stack works** (DPU + 14 nm DSI + our panel driver, with DCS brightness), the
+**Adreno 612 renders** (freedreno, OpenGL ES 3.2), **touch works** and Phosh runs. Open: Phosh/KWin on the msm KMS
+device (not yet tried on it), audio, Wi-Fi, modem, charging. Eight GPIOs are secure-world owned and reserved in the
+DTS (see TLMM).
 
 Results of the v2 boots, in the order they were tried (details in the sections below):
 
@@ -252,6 +253,42 @@ no timeout: kill `phoc` to end its session.
 - The downstream live device tree can be dumped from slot A (`/sys/firmware/devicetree/base`, decompile with `dtc -I fs`).
   Keep such dumps out of the repo: they carry device identifiers.
 
+### Display: the real DPU/DSI/panel stack works, brightness included (package r12)
+
+The panel is a 1080x2400 Samsung-style AMOLED in DSI video mode (stock node `k7 38 0c 0a`, vendor commands behind
+`F0 5A 5A`); brightness is the DCS command `0x51` (11 bit, 0..0x7ff, big endian), exposed as the backlight device
+`/sys/class/backlight/ae94000.dsi.0` (max 2047). It took five separate fixes, each hiding the next:
+
+1. **`CONFIG_DRM_MSM_DSI_14NM_PHY=y`**: it was off, so the PHY driver for this SoC was not even built.
+2. **Patch 0006**, `qcom,sm6150-mdss` in the SMMU's `qcom_smmu_client_of_match` (identity default domain): without it the
+   bootloader's scanout hit an empty translation context, hundreds of thousands of `Unhandled context fault` per second
+   from 0.47 s, and a black screen.
+3. **Patch 0007**, stop the bootloader's INTF timing engines in `dpu_kms_hw_init`: otherwise the DSI video engine
+   stays busy and every panel command times out with -110.
+4. **Patch 0005**, the panel driver `panel-xiaomi-mojito-k7` (init/off sequences, timings, reset, backlight) plus the
+   `&mdss`, `&mdss_mdp`, `&mdss_dsi0`, `&mdss_dsi0_phy` nodes and the panel node in the DTS.
+5. **The last one was a power-cycle, not a register.** With the framebuffer holding `MDSS_CORE_GDSC` and the display clocks
+   the display core never power-cycles, the bootloader's leftover state survives, the CTL sits in a hardware reset
+   (`hw recovery is not complete for ctl:1`, flush `0x80020041` never latches, `DANGER_STATUS=0x33`, MDP irq never
+   fires) and the panel shows solid **blue** (the DPU underflow colour: DSI, panel and INTF timing are all fine). **Remove
+   `power-domains` and `clocks` from the `framebuffer@9c000000` node** (done in the DTS, with a comment): genpd then collapses
+   the domain once nothing uses it and msm powers it up fresh. Cost: a few seconds of green/black between the splash
+   and the first real frame. A manual `echo 4 > /sys/class/graphics/fb0/blank; echo 0 > ...` (with kmscon stopped) did
+   the same by hand and found the cause.
+
+What did NOT help (each tested, do not repeat): MDP core clock (forced 307 MHz), lut/rot clocks, `INTF_CONFIG2`/DATA_HCTL,
+UBWC static register, SMMU prefetch (ACTLR), VIG instead of DMA pipe, interconnect votes, VBIF, DSI host registers,
+`VIDEO_BURST` (the stock traffic mode is non-burst; our DSI registers matched the bootloader's). An `mdss` `resets =
+<&dispcc DISP_CC_MDSS_CORE_BCR>` line (as sm6125/sm6350 have) needs a reset map in `dispcc-qcs615.c` (`{0x2000}`, absent
+upstream) and then **hangs the phone at probe** (the reset hits a live scanout), so it is not used.
+
+Debugging aids that found it: the DPU register dump `/dev/mem` (blocks listed in the scratch scripts; `ctl:N` in the log is a
+1-based enum, so `ctl:1` is `ctl_0` at `0x1000`), `msm_disp_snapshot` devcoredump, the bootloader's working state read on the
+r6 image (no msm), and the downstream kernel rebuilt with `CONFIG_DEVMEM`/`CONFIG_DEBUG_FS` (stock 4.14 has neither; do not read the whole
+GCC space or all PMIC regmaps on it, both crashed the phone). Repro of the old failure: `rc-service kmscon-console restart`, then
+count `vblank timeout` in `dmesg`. Boot with `separate_gpu_kms=1` in `/etc/modprobe.d/msm.conf` still works; `dpu_prefer_vig` is not needed.
+Patch 0007 may be unnecessary now that the domain collapses; it is harmless.
+
 ### Display: the bootloader splash now stays up (simpledrm), login visible
 
 The panel (an OLED, no backlight device) shows the bootloader's splash through simpledrm, and kmscon's login
@@ -335,13 +372,13 @@ phone (display, touch, Wi-Fi, modem, audio out work; GPU renders but hangs under
 1. **GPU: done for off-screen rendering** (see above). Remaining: a KMS output for a compositor (item 2), and Vulkan
    (turnip) if wanted. `kmscube`, `eglinfo`, `phoc` and `phosh` are not installed and the phone has no internet; fetch the
    apks on the PC (`pmbootstrap` or the edge mirror) and serve them over the USB link.
-2. **Display** through the real stack (the splash already works, see above): DPU, DSI host and PHY, and a DSI panel
-   driver (generate it from the stock panel node with linux-mdss-dsi-panel-driver-generator).
+2. **Display: done** (see above). Next: run Phosh on the msm KMS device (`WLR_DRM_DEVICES` = the msm card, `renderD128` for rendering,
+   no simpledrm) and then KWin/Finder; `tools/run-phosh*.sh` still point at simpledrm's `card0`.
 3. **Touch: done** (r6, see above). Next, with TLMM working and any pin outside gpio0-3 / gpio6-9 usable: panel reset/TE,
    then the ADSP remoteproc on its own build (it is the audio/modem/Wi-Fi prerequisite and the likeliest to hang the boot,
    like the secure-world pins did), then charging (smb5 + bq2597x have no mainline match), Wi-Fi, audio, and finally KWin 6
-   and Finder.
-4. The kernel package (`7.4_rc4-r6`): patches 0001-0004, `QCOM_WDT=y`, `EFI_ZBOOT` off, raw `Image` installed as
+   and Finder. (Panel reset/TE: the reset pin is already used by the panel driver.)
+4. The kernel package (`7.4_rc4-r12`): patches 0001-0007, `QCOM_WDT=y`, `EFI_ZBOOT` off, raw `Image` installed as
    `/boot/Image`, `LOCALVERSION=-sm6150`, and `DRM_MSM=m` (the modules are in the package). Its DTB has board-id `0 0`; `mk-bootimg-v2.sh` patches in
    `0x22` when packing. Patch 0001 is regenerated from `mainline/sm6150-xiaomi-mojito.dts`; for DTS-only
    changes use `build-dtb.sh` instead of rebuilding the package.

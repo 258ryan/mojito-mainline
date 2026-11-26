@@ -1,0 +1,48 @@
+From: mojito-mainline <noreply@anthropic.com>
+Subject: [PATCH] drm/msm/dpu: stop the bootloader timing engine before the DSI bring-up
+
+With a splash left running by the bootloader the DSI video engine is busy when
+the panel driver sends its init sequence, so every command times out (-110)
+and the DPU never gets a vblank. Switch off the timing engine of the DSI INTFs
+once the resource manager has created them.
+
+Signed-off-by: mojito-mainline <noreply@anthropic.com>
+---
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c	2026-11-26 12:42:07.159193091 +0500
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c	2026-11-26 12:42:07.183794962 +0500
+@@ -1135,6 +1135,26 @@
+ 
+ #define	DPU_PERF_DEFAULT_MAX_CORE_CLK_RATE	412500000
+ 
++/*
++ * The bootloader leaves its splash scanning out through an INTF timing engine. While that engine runs
++ * the DSI video engine stays busy, the DSI host is reset underneath it and a video mode panel cannot
++ * receive its init sequence (every command times out). Stop the timing engines of the DSI interfaces
++ * before anything touches the DSI link; the first atomic commit starts them again with the real mode.
++ */
++static void dpu_kms_stop_bootloader_timing(struct dpu_kms *dpu_kms)
++{
++	int i;
++
++	for (i = INTF_0; i < INTF_MAX; i++) {
++		struct dpu_hw_intf *intf = dpu_rm_get_intf(&dpu_kms->rm, i);
++
++		if (!intf || !intf->cap || intf->cap->type != INTF_DSI)
++			continue;
++		if (intf->ops.enable_timing)
++			intf->ops.enable_timing(intf, 0);
++	}
++}
++
+ static int dpu_kms_hw_init(struct msm_kms *kms)
+ {
+ 	struct dpu_kms *dpu_kms;
+@@ -1203,6 +1223,8 @@
+ 		goto err_pm_put;
+ 	}
+ 
++	dpu_kms_stop_bootloader_timing(dpu_kms);
++
+ 	dpu_kms->hw_mdp = dpu_hw_mdptop_init(dev,
+ 					     dpu_kms->catalog->mdp,
+ 					     dpu_kms->mmio,
