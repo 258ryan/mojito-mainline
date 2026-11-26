@@ -1,7 +1,55 @@
 # Handoff: postmarketOS on the Redmi Note 10 (mojito/sunny)
 
-For the next agent picking this up. Read this whole file before touching the phone.
-State as of 2026-11-26.
+For the next agent picking this up. Read the START HERE section, then the rest as needed, before touching the phone.
+State as of 2026-11-27.
+
+## START HERE (2026-11-27): where things stand
+
+**Working on slot B (mainline 7.4-rc4):** boot to SSH over USB, UFS, USB gadget, watchdog, the TLMM pin controller (115 GPIOs,
+8 secure-world pins reserved), the **real display stack with DCS brightness**, **touch** (FT5452), the **Adreno 612** (freedreno, GLES 3.2),
+**Phosh starting on boot** through an OpenRC service with a seat-attached elogind session (brightness slider works), flash LED and
+RTC nodes, `i2c3` enabled. **Not working / not started:** battery level and charging control, audio, Wi-Fi/Bluetooth, modem, camera,
+NFC, sleep/suspend, vibrator, Vulkan. **Slot A** (downstream 4.14) is untouched and works; keep it that way.
+
+**Exactly what is on the phone right now** (so you know the baseline before changing anything):
+- Slot B `boot_b`: the **r11** kernel `Image` packed with the **final** device tree (identical to what `pkgrel=12` in the repo builds, except
+  r11 also carries a harmless unused `dispcc` reset table). `dtbo_b` is erased. Slot A's `boot_a` was restored to the original image.
+- `/etc/modprobe.d/msm.conf`: `options msm separate_gpu_kms=1` (display and GPU are two DRM devices: `card2` = msm KMS with the DSI connector,
+  `card1` = GPU, `renderD128`). Modules in `/lib/modules/7.4.0-rc4-sm6150` are r11's (the previous tree is kept as `.old`).
+- OpenRC: `elogind` and `phosh-mojito` in `default`, `kmscon-console` removed from `default`, `user` in group `seat`,
+  `/etc/pam.d/phosh` exists. The text console is gone from the screen on purpose (it would hold the display); SSH is the way in.
+- The phone's **clock is stuck in 1970** (no RTC time, no network). That already broke OpenRC once (see the Phosh autostart section).
+
+**Housekeeping owed:** build `pkgrel=12` (`pmbootstrap build linux-postmarketos-qcom-sm6150`; the user runs builds, see rules), unpack the apk, pack the
+v2 boot image (`mainline/mk-bootimg-v2.sh`, see "Packaging the v2 boot image"; the pmos boot/root UUIDs are in the running boot image's cmdline
+or `blkid` on the phone, they are not recorded here), flash `boot_b`, erase `dtbo_b`, `set_active b`, install the modules with
+`tools/install-modules.sh` (**run `depmod` on the phone**: the package's own `depmod` cannot read `.zst` modules, so a raw copy leaves `msm` without
+dependencies), reboot. After that the repo, the package and the phone all match.
+
+**Suggested order from here:**
+1. **KWin/Finder smoke test.** First try dropping `separate_gpu_kms=1` (modprobe option, no build) so one DRM device both scans out and renders,
+   which is what KWin's DRM backend wants; if the unified mode misbehaves, KWin can still use `card2` + `renderD128`. Phosh already proves the stack.
+2. **Battery/charging.** Work in progress in `mainline/wip/` (see its README): a compile-tested port of the SMB5 charger driver and the device-tree
+   fragment, untested on hardware, not in the package. The charger is in **PM6150 (SID 0)**, not PM6150L. There is no driver for the QG fuel gauge,
+   so a battery percentage needs a small voltage-to-percentage `power_supply` (the downstream battery is 5000 mAh, 4.45 V max) or a QG port.
+3. **Remote processors** (the key to audio, Wi-Fi, Bluetooth, modem): ADSP first, **on its own build** (most likely to hang the boot, like the secure
+   pins did), then the modem. Firmware is already on the phone (`/lib/firmware`, see "Other hardware found").
+4. Polish: the few seconds of green/black between splash and Phosh, suspend, vibrator, flashlight, RTC time, Vulkan (turnip).
+
+**Rules and hazards learned the hard way** (the details are in the sections below):
+- The user runs the `pmbootstrap` builds and watches the panel; the agent flashes and diagnoses. Ask before using any sudo helper; never store passwords
+  in the repo; delete temporary SSH helpers. Commit/push only when asked, with the GitHub no-reply identity (see `git log`).
+- Things that **crash or hang the phone**: reading TLMM pins 0-3 and 6-9 (secure world); an `mdss` `resets` line (hangs at probe); sweeping all of
+  GCC or all PMIC regmaps on the downstream kernel; `rmmod msm` (oops). A crash gives no log: nothing survives a reset (PMIC cold-reset), so
+  prefer staged, individually safe reads.
+- After any reboot the phone's `/tmp` is empty; fastboot can list the device several seconds late (check `lsusb` and retry); an interrupted boot falls
+  back to slot A after a few tries. Reboot to the bootloader without buttons with the syscall one-liner in "Working with the phone".
+- Failure on the display always looked like "blue screen" or "black": read the kernel log (`dmesg`) before believing the picture, because when the
+  driver fails to probe the system silently falls back to `simple-framebuffer` and the screen looks healthy.
+- The investigation method that worked: compare against a known-good state (the bootloader's registers read on the r6 image; the downstream kernel
+  rebuilt with `DEVMEM`+`DEBUG_FS`), change one variable at a time, keep a deterministic repro.
+- Files outside the repo that an agent on the same machine can reuse: `~/.claude-work/pmos-mojito/` (the pmbootstrap work, `downstream-dump/` with the
+  bootloader and downstream register dumps, device tree and firmware listings). They are not in the repo because they carry device identifiers.
 
 ## Goal
 
@@ -11,8 +59,8 @@ acceleration with GBM + EGL, which this phone can only get from a **mainline ker
 why there are two ports here:
 
 - `downstream/`: Xiaomi's 4.14 kernel. **Works today** (boots, SSH, text console on screen). Stays on slot A.
-- `mainline/`: Linux 7.4-rc4 + an SM6150 device tree. **Boots to SSH** (since 2026-11-26) with every GPIO
-  reserved; the splash display and login work, and only a few pins can be valid. Developed on slot B.
+- `mainline/`: Linux 7.4-rc4 + an SM6150 device tree. Boots to SSH and, as of 2026-11-27, runs **Phosh on the real
+  display (DPU/DSI/panel, brightness), touch, the Adreno GPU and a Phosh autostart**. Developed on slot B.
 
 ## The device
 
@@ -185,6 +233,9 @@ FD612`, `OpenGL ES 3.2 Mesa 26.3.1`, clear and triangle tests PASS, no kernel er
 
 ### Phosh runs (phoc renders on the Adreno, scanout on simpledrm)
 
+> **Historical** (2026-11-26): this was Phosh on simpledrm before the real display driver worked. It is superseded: Phosh now runs on the msm KMS
+> device and starts on boot (see "Display: the real DPU/DSI/panel stack works" and "Phosh starts on boot" below). The traps (seatd, D-Bus) still apply.
+
 `tools/run-phosh.sh` (run as root on the phone, from SSH) starts Phosh 0.59 for 45 s: `phoc` renders on
 `/dev/dri/renderD128` (GLES2, `GL renderer: FD612`) and presents on the simpledrm card `/dev/dri/card0` (XR24 linear
 buffers, atomic modeset 1080x2400 @ 60 Hz, wlroots multi-GPU copy). The shell, `gnome-session`, squeekboard, polkitd and
@@ -312,6 +363,9 @@ count `vblank timeout` in `dmesg`. Boot with `separate_gpu_kms=1` in `/etc/modpr
 Patch 0007 may be unnecessary now that the domain collapses; it is harmless.
 
 ### Display: the bootloader splash now stays up (simpledrm), login visible
+
+> **Historical:** these framebuffer power-domain/clock holds were REMOVED once the real display driver worked, because holding the domain
+> keeps the DPU stuck in the bootloader's state (see "Display: the real DPU/DSI/panel stack works").
 
 The panel (an OLED, no backlight device) shows the bootloader's splash through simpledrm, and kmscon's login
 appears. Two properties on the `framebuffer@9c000000` node in the DTS did it; each fixed a different failure:

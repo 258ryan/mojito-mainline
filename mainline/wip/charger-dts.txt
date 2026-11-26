@@ -1,0 +1,49 @@
+// Device-tree fragment for the SMB5 charger (UNTESTED). Add to mainline/sm6150-xiaomi-mojito.dts after the patch in this
+// directory is wired into the package (APKBUILD source + sha512, config CHARGER_QCOM_SMB5=m).
+// Values come from the downstream tree: the charger is in PM6150 (SID 0, label pm6150_lsid0) with the standard SMB5
+// sub-blocks chgr@1000 dcdc@1100 batif@1200 usb@1300 dc@1400 typec@1500 misc@1600; periph IDs are 0x12 (batif), 0x13 (usb),
+// 0x16 (misc), the same as the PM8150B the driver was written for. Battery: 5000 mAh, max 4.45 V (vendor: 6 A fast charge with
+// the bq2597x pump, which is NOT used here, so start conservatively).
+
+&pm6150_adc {
+	channel@7 {
+		reg = <ADC5_USB_IN_I>;
+		qcom,pre-scaling = <1 1>;
+		label = "usb_in_i_uv";
+	};
+
+	channel@8 {
+		reg = <ADC5_USB_IN_V_16>;
+		qcom,pre-scaling = <1 16>;
+		label = "usb_in_v_div_16";
+	};
+};
+
+/ {
+	battery: battery {
+		compatible = "simple-battery";
+		voltage-min-design-microvolt = <3400000>;
+		voltage-max-design-microvolt = <4450000>;
+		charge-full-design-microamp-hours = <5000000>;
+		constant-charge-current-max-microamp = <2000000>;	/* conservative; the vendor SMB5 limit is 3 A */
+	};
+};
+
+&pm6150_lsid0 {
+	pm6150_charger: charger@1000 {
+		compatible = "qcom,pm8150b-charger";
+		reg = <0x1000>;
+
+		interrupts = <0x0 0x13 0x4 IRQ_TYPE_EDGE_BOTH>,
+			     <0x0 0x12 0x2 IRQ_TYPE_EDGE_BOTH>,
+			     <0x0 0x16 0x1 IRQ_TYPE_EDGE_RISING>,
+			     <0x0 0x13 0x7 IRQ_TYPE_EDGE_RISING>;
+		interrupt-names = "usbin-plugin", "bat-ov", "wdog-bark", "usbin-icl-change";
+
+		io-channels = <&pm6150_adc ADC5_USB_IN_I>,
+			      <&pm6150_adc ADC5_USB_IN_V_16>;
+		io-channel-names = "usb_in_i_uv", "usb_in_v_div_16";
+
+		monitored-battery = <&battery>;
+	};
+};
