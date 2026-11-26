@@ -1,0 +1,26 @@
+From: postmarketOS mojito port
+Subject: [PATCH] wifi: ath10k: qmi: register for the pin connect result indication
+
+The downstream icnss driver registers for pin_connect_result in the WLFW indication register
+request; ath10k does not. Candidate fix for SM6150 MPSS.AT.4.4 firmware rejecting the capability
+request (QMI error 119) and asserting in wlan_process. UNTESTED on hardware.
+---
+diff --git a/drivers/net/wireless/ath/ath10k/qmi.c b/drivers/net/wireless/ath/ath10k/qmi.c
+index 08a64f737..1b9144de3 100644
+--- a/drivers/net/wireless/ath/ath10k/qmi.c
++++ b/drivers/net/wireless/ath/ath10k/qmi.c
+@@ -763,6 +763,14 @@ ath10k_qmi_ind_register_send_sync_msg(struct ath10k_qmi *qmi)
+ 	req.fw_ready_enable = 1;
+ 	req.msa_ready_enable_valid = 1;
+ 	req.msa_ready_enable = 1;
++	/*
++	 * Register for the pin connect result like the downstream icnss driver
++	 * does. Some modem WLAN firmware (SM6150 MPSS.AT.4.4) waits for a client
++	 * of this indication before answering the capability request; without it
++	 * the request is rejected (QMI error 119) and wlan_process asserts.
++	 */
++	req.pin_connect_result_enable_valid = 1;
++	req.pin_connect_result_enable = 1;
+ 
+ 	if (ar_snoc->xo_cal_supported) {
+ 		req.xo_cal_enable_valid = 1;

@@ -3,43 +3,53 @@
 For the next agent picking this up. Read the START HERE section, then the rest as needed, before touching the phone.
 State as of 2026-11-27.
 
-## START HERE (2026-11-26, evening): where things stand
+## START HERE (2026-11-26, end of session): where things stand
 
-**Working on slot B (mainline 7.4-rc4, package `pkgrel=21`):** boot to SSH over USB, UFS, USB gadget, watchdog, TLMM, the real display
-stack with DCS brightness, touch, the Adreno 612 (freedreno), Phosh on boot, flash LED, RTC, **battery readout (own fuel-gauge driver),
-charging (SMB5), the ADSP, and the modem: LTE registration, mobile data (IPv4 + IPv6, ~22 Mbit/s) and SMS sending verified.**
-**Not working / not started:** calls (need call audio), audio, Wi-Fi (node added, firmware handshake fails, see "Wi-Fi"), Bluetooth, camera, sensors, suspend, vibrator, Vulkan.
-**Slot A** (downstream 4.14) is untouched and works; keep it that way.
+**Working on slot B (mainline 7.4-rc4):** boot, UFS, USB networking/SSH, display + DCS brightness, touch, Adreno 612, Phosh on boot with
+the correct corner/cutout layout (gmobile panel data, `mainline/gmobile/`), **battery gauge** (`qcom_qg_lite`, patch 0010), **charging**
+(SMB5, patch 0008; wall ~1 A, PC port 500 mA, correct Charging/Full status), **ADSP**, **modem**: LTE data (~22 Mbit/s, IPv4+IPv6), SMS
+send, data on/off toggle, **APR audio services** (q6core/afe/asm/adm bound; no sound card yet).
+**Not working:** Wi-Fi (handshake, see "Wi-Fi"), speaker/mic/earpiece (needs the LPASS LPI pin driver, see "Audio"), calls (need audio),
+Bluetooth, volume-up key, haptics, sensors, suspend, Vulkan. **Slot A** (downstream 4.14) is untouched; keep it working.
 
 **Exactly what is on the phone right now:**
-- `boot_b`: package r19's kernel + the r20/r21 device tree (identical DTS); `dtbo_b` erased. r21 only adds an SMB5 status fix
-  (driver change). Modules installed with `tools/install-modules.sh` (depmod on the phone). `/etc/modprobe.d/` has no blacklists left.
-- OpenRC default runlevel adds `tqftpserv`, `rmtfs`, `modemmanager` (installed with `tools/install-modem-userspace.sh`), plus the
-  earlier `elogind`, `phosh-mojito`. A NetworkManager GSM connection `mobile` (the carrier's APN) autoconnects.
-- `rmtfs` runs in postmarketOS's default `rmtfs_avoid_writing="true"` mode: the modem's EFS writes stay in RAM. An EFS backup
-  (modemst1/2, fsg, fsc) exists on the PC, outside the repo (it carries device identifiers).
-- The clock is only right after an NTP sync over LTE (`ntpd -q -n -p pool.ntp.org`); there is no time sync at boot yet.
+- `boot_b` = r21 kernel + a Wi-Fi *test* DTB (Wi-Fi node enabled, sm7125-style: 2 MB MSA, `msa-fixed-perm`, ch1 = L11c, L10a always on,
+  APR audio). Harmless because `ath10k_snoc` is blacklisted (`/etc/modprobe.d/ath10k.conf`). To return to the repo state, build r23 and flash it.
+- Modules: r21. Packages added by hand: rmtfs, tqftpserv, qrtr, ModemManager (enabled at boot), qmi-utils, gmobile/gmobile-udev 0.7.5-r1
+  (local build). NetworkManager connection `mobile` (carrier APN) autoconnects. `/lib/firmware/ath10k/WCN3990/hw1.0/{firmware-5.bin,
+  board.bin}` (firmware-5 from linux-firmware-ath10k, board.bin = stock bdwlan.bin).
+- The clock is only right after NTP over LTE (`ntpd -q -n -p pool.ntp.org`); no time sync at boot yet.
 
-**Suggested order from here:** (1) Wi-Fi: node and firmware are in place but the WLFW handshake fails (see "Wi-Fi"); (2) audio: APR services work (stage 1, r23); the SoundWire/WCD937x path needs an SM6150 LPASS LPI pin driver (port
-sm7150-mainline's `pinctrl-sm7150-lpass-lpi.c`; the LPI block is at **0x62b52000**, 0x62b40000 is the SSC block that hangs); ADSP speaks **legacy APR**
-(channels `apr_audio_svc`, `apr_apps2`), not AudioReach, so it needs APR nodes + `qcom,sm8250-sndcard`, and very likely the SMMU
-patch 0017 of the violet port (hyp-owned context banks) before any stream; then call audio (`q6voiced`); (3) time sync at boot;
-(4) KWin/Finder smoke test; (5) suspend.
+**Package state:** `mainline/linux-postmarketos-qcom-sm6150` is at **pkgrel=23, NOT BUILT YET** (adds patch 0014, the SMMU fix audio
+streams need, plus the DTS: APR audio, L10a always on, Wi-Fi node disabled). Build it first:
+`pmbootstrap build linux-postmarketos-qcom-sm6150` (~3 min with ccache; config/header changes ~13 min), then
+`tools/install-modules.sh`, `mk-bootimg-v2.sh`, flash `boot_b`. gmobile: `pmbootstrap build --arch aarch64 gmobile`.
+
+**Next steps, in order (the user's list):**
+1. **Wi-Fi: test `mainline/wip/0015` (ath10k registers for `pin_connect_result` like stock icnss).** It is the one remaining difference
+   found between the stock icnss handshake and ath10k's (see "Wi-Fi"). Quick test without a package build: apply it to a 7.4-rc4 tree with
+   the package config, `make ARCH=arm64 LLVM=1 LOCALVERSION= modules_prepare`, then
+   `make ARCH=arm64 LLVM=1 LOCALVERSION= M=drivers/net/wireless/ath/ath10k KBUILD_MODPOST_WARN=1 modules` (no MODVERSIONS, no
+   signing, so vermagic `7.4.0-rc4-sm6150` is enough; `LOCALVERSION=` drops the `+`), copy `ath10k_core.ko`/`ath10k_snoc.ko` to
+   `/lib/modules/7.4.0-rc4-sm6150/updates/`, `depmod`, `modprobe ath10k_snoc` on the test DTB. If it works: also try without
+   `msa-fixed-perm`/ch1, add the patch to the package, enable the node, then Note 7 Pro patches 0010/0015 for later failures.
+2. **Audio:** port `sm7150-mainline/linux` (tag v7.1_rc3) `drivers/pinctrl/qcom/pinctrl-sm7150-lpass-lpi.c` to SM6150 (LPI block at
+   **0x62b52000**; 0x62b40000 is the SSC block that hangs the SoC), then macros + SoundWire + WCD937x + sound card from their
+   `sm7150.dtsi` / `sm7150-xiaomi-*.dts`. Speaker = WCD937x AUX_OUT -> aw87xxx analog PA (i2c3 0x58/0x5b, chip id 0x59, not aw87390).
+3. Volume-up key (pm6150l GPIO 2 in the sm7125 Xiaomi tree), PMIC haptics, Bluetooth (WCN3990 on UART; sm7125/sm7150 trees have the
+   node), sensors (ADSP sensor core, QMI 400; no mainline driver), time sync at boot, suspend, KWin/Finder.
 
 **Rules and hazards learned the hard way** (details below):
-- The user runs `pmbootstrap build`; the agent flashes and diagnoses. Ask for the SSH password each session; never store passwords.
-  Commit/push only when asked, with the GitHub no-reply identity (see `git log`), and keep device identifiers, the carrier/APN and
-  phone numbers out of the repo.
-- **Stage risky drivers:** blacklist the module in `/etc/modprobe.d/` before flashing, load it by hand from SSH, un-blacklist once
-  it works. A hang then costs a manual reboot, not a broken boot. (Used for SMB5, the ADSP and IPA today.)
-- Things that crash or hang the phone: TLMM pins 0-3 and 6-9; an `mdss` `resets` line; sweeping all of GCC or all PMIC regmaps on the
-  downstream kernel; `rmmod msm`. No log survives a reset.
-- **PMIC state survives a warm reboot.** A charger misconfiguration (e.g. a latched USBIN suspend) stays until the cable is replugged.
-- Reading PMIC registers safely: `/sys/kernel/debug/regmap/0-00/registers` only reads the window asked for; each line is 9 bytes, so
-  `dd bs=9 skip=$((0xADDR)) count=N`. There is no write path (no `REGMAP_ALLOW_WRITE_DEBUGFS`).
-- Builds: ccache makes a `.c`-only change ~3 min; a config or widely included header change ~13 min. Object-only test compiles miss
-  `modpost` errors (symbol namespaces): `MODULE_IMPORT_NS("IIO_CONSUMER")` is needed for IIO consumers in 7.4.
-- After any reboot the phone's `/tmp` is empty; run `rc-update -u` after installing services (the 1970 clock confuses OpenRC's cache).
+- The user runs `pmbootstrap build`; the agent flashes and diagnoses. Ask for the SSH password each session; never store it. Commit with the
+  GitHub no-reply identity (see `git log`); keep device identifiers, carrier/APN and phone numbers out of the repo.
+- **Stage risky drivers:** blacklist the module in `/etc/modprobe.d/` before flashing, load by hand over SSH, un-blacklist once it works.
+- **Do not restart the modem (`rc-service rmtfs restart`) while IPA is set up**: the modem asserts in `ipa_hal.c` and IPA times out; reboot.
+- PMIC state survives a warm reboot (a latched charger suspend needs a replug). Regmap debugfs reads only the requested window:
+  `dd if=/sys/kernel/debug/regmap/0-00/registers bs=9 skip=$((0xADDR)) count=N`.
+- Hangs/crashes: TLMM pins 0-3/6-9; an `mdss` `resets` line; `rmmod msm`; LPASS 0x62b40000 (SSC) without power. No log survives a reset.
+- Builds: ccache makes `.c`-only changes ~3 min. Object-only test compiles miss modpost errors (`MODULE_IMPORT_NS("IIO_CONSUMER")`).
+- `/tmp` on the phone is empty after reboot; run `rc-update -u` after adding services (1970 clock). apk caches repo indexes by URL: serve a
+  new local repo on a new port. Reboot to fastboot from SSH: copy a small python script with the `reboot(..., "bootloader")` syscall.
 
 ## Goal
 
@@ -522,7 +532,13 @@ Later tests (2026-11-26 evening):
 - **Do not restart the modem (`rc-service rmtfs restart`) while IPA is set up**: the modem asserts in `ipa_hal.c` (GSI) and IPA then
   times out (-110); `rmmod ath10k_snoc` hangs afterwards. Reboot instead.
 - Reference with working WCN3990 on the same family: sm7150-mainline/linux (Xiaomi sweet/davinci) uses a `qcom,wcn3998-pmu` node
-  (swctrl GPIO, vddio) and no quirks. Remaining ideas: compare the WLFW capability request bytes with what the stock icnss sends.
+  (swctrl GPIO, vddio) and no quirks. Stock icnss comparison (Xiaomi kernel `drivers/soc/qcom/icnss.c`, `icnss_qmi.c`): sequence ind_register -> msa_info -> assign MSA
+  (MSS_MSA + WLAN [+ WLAN_CE], same as ath10k) -> msa_ready -> cap; **no host cap** (ath10k's skip quirk matches); same client id
+  0x4b4e454c; the empty cap request matches. **The one difference: icnss sets `pin_connect_result_enable` in ind_register, ath10k does
+  not** -> candidate fix `mainline/wip/0015`, untested (modules were built, the session ended before loading them).
+- sm7125-mainline (Redmi Note 9 Pro, same PMICs, same `wlan_mem` 0x93900000, Wi-Fi works, unpatched ath10k): 2 MB MSA +
+  `qcom,msa-fixed-perm` + ch1 = L11c. With that config here: boots fine, MSA permission errors gone, still 119. The repo DTS now uses it.
+- Stock node also has `qcom,smmu-s1-bypass` and iova ranges (matters for data path later, not for the handshake).
 
 ### Phosh: display corners and the camera cutout (`mainline/gmobile/`)
 
