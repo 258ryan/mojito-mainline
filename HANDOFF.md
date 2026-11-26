@@ -701,6 +701,20 @@ Later tests (2026-11-26 evening):
   - No debugfs in the MIUI kernel; tracefs works (regulator/clk/gpio/rpmh/spmi/scm/msm_bus events), but Android init stops a boot-time trace at ~3.5 s, before icnss.
     The dumps also cover the live DTB (`fdt.dtb`), kernel config, sensors/registry, audio/mixer/tinymix, fingerprint, overlays (auto-brightness), battery/charger,
     CPU/cpufreq/idle/thermal, touch/tap-to-wake, display, USB (gadget configfs, DWC3/PHY) and persist.
+- **ANDROID-PARITY TESTS ON MAINLINE (2026-11-27, after the MIUI reference), all still `capability req rejected: 119` ~200 ms after the request:**
+  (A) Wi-Fi node on direct rails like stock icnss (`mainline/wip/wifi-lpm-test.dtsi`: no PMU node, no ch1, L9a 640 mV, L10c 3.312 V, L1c/L2c/L10c/L9a
+  `regulator-initial-mode` LPM; PMIC confirms mode 0x04 = LPM and all enabled), rails switched on by ath10k only after the WLFW service exists (like Android);
+  (B) `mainline/wip/0019` (`pre_bdf=1`): the firmware REFUSES regdb.bin and board data before the capability request (QMI error 90, incompatible state), so
+  on Android the cap request must already succeed within ~60 ms of QMI connect (cnss-daemon's BDF at +63 ms); (C) every PMIC RF/LN clock voted on via rpmhvote
+  (RF1, RF2, RF3, LN_BB2, LN_BB3 all EN=0x80 / OK) during the WLAN restarts. The Android trace shows nothing else from the AP in that window (only the 4 rail
+  votes, 2x SCM hyp-assign, IRQs from smp2p/glink). RB1 (WCN3950, qrb2210-rb1.dts, works upstream) uses plain PMU rails and no clock either.
+  (D) **firmware-package mismatch found and ruled out:** the pmOS `firmware-xiaomi-mojito` package (AbdulkareemQasem blobs) ships a DIFFERENT modem
+  build than this phone's ROM (V14.0.9.0: nearly all modem.b* segments, modem.mdt, wlanmdsp.mbn, adsp.mdt, cdsp.mdt differ). Replaced modem.* + wlanmdsp.mbn
+  with the ROM's own (stock/extract/fwall; package copies kept in /lib/firmware/postmarketos-pkg-backup/): the modem and LTE (rmnet_ipa0) work, still 119.
+  The phone now runs the ROM's modem + wlanmdsp (an `apk upgrade` of the firmware package would put the package ones back).
+  => The difference is on the MODEM side, not in anything the AP drives: same wlanmdsp.mbn, but the modem image/config, EFS, or the services the modem talks
+  to differ between MIUI and pmOS. Next: compare the QMI/QRTR service list and the modem's tftp/rmtfs file requests under MIUI vs pmOS, and the modem firmware
+  files actually loaded (MIUI loads them from /vendor/firmware_mnt, pmOS from /lib/firmware/postmarketos: compare checksums of modem.* and the mcfg/mbn set).
 - **Still unknown:** what the modem's WLAN power-up waits ~200 ms for. Needs the modem's own log or a different angle (e.g. memory capture before `qcom_pas_shutdown`, risky).
 - sm7125-mainline (Redmi Note 9 Pro, same PMICs, same `wlan_mem` 0x93900000, Wi-Fi works, unpatched ath10k): 2 MB MSA +
   `qcom,msa-fixed-perm` + ch1 = L11c. With that config here: boots fine, MSA permission errors gone, still 119. The repo DTS now uses it.

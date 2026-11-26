@@ -1,0 +1,166 @@
+From: postmarketOS mojito port
+Subject: [PATCH] wifi: ath10k: qmi: EXPERIMENT, download regdb + board data before the capability request
+
+Diagnostic only. Module parameter pre_bdf (0 stock, 1 regdb.bin + bdf_gl.bin, 2 bdf only), like the
+downstream cnss-daemon on stock MIUI, which sends regdb.bin then bdf_gl.bin right after MSA ready. NOT for upstream.
+---
+diff -ru a/drivers/net/wireless/ath/ath10k/qmi.c b/drivers/net/wireless/ath/ath10k/qmi.c
+--- a/drivers/net/wireless/ath/ath10k/qmi.c	2026-11-26 23:34:59.886880427 +0500
++++ b/drivers/net/wireless/ath/ath10k/qmi.c	2026-11-26 23:34:59.889822854 +0500
+@@ -14,6 +14,7 @@
+ #include <linux/module.h>
+ #include <linux/net.h>
+ #include <linux/platform_device.h>
++#include <linux/firmware.h>
+ #include <linux/firmware/qcom/qcom_scm.h>
+ #include <linux/soc/qcom/smem.h>
+ #include <linux/string.h>
+@@ -26,6 +27,15 @@
+ #define ATH10K_QMI_TIMEOUT		30
+ #define SMEM_IMAGE_VERSION_TABLE       469
+ #define SMEM_IMAGE_TABLE_CNSS_INDEX     13
++
++/*
++ * EXPERIMENT (mojito/sunny, WCN3950 on SM6150): like the downstream cnss-daemon,
++ * download regdb.bin and the board data right after MSA ready and BEFORE the
++ * capability request. Files: ath10k/WCN3990/hw1.0/android/{regdb.bin,bdf_gl.bin}.
++ */
++static int pre_bdf;
++module_param(pre_bdf, int, 0644);
++MODULE_PARM_DESC(pre_bdf, "0: stock order, 1: regdb+bdf before cap, 2: bdf only before cap");
+ #define SMEM_IMAGE_VERSION_ENTRY_SIZE	128
+ #define SMEM_IMAGE_VERSION_NAME_SIZE	75
+ 
+@@ -235,8 +245,18 @@
+ 	return ret;
+ }
+ 
++static int ath10k_qmi_blob_dnld_send_sync(struct ath10k_qmi *qmi, const u8 *data,
++					 unsigned int len, int bdf_type);
++
+ static int ath10k_qmi_bdf_dnld_send_sync(struct ath10k_qmi *qmi)
+ {
++	return ath10k_qmi_blob_dnld_send_sync(qmi, qmi->ar->normal_mode_fw.board_data,
++					      qmi->ar->normal_mode_fw.board_len, -1);
++}
++
++static int ath10k_qmi_blob_dnld_send_sync(struct ath10k_qmi *qmi, const u8 *data,
++					 unsigned int len, int bdf_type)
++{
+ 	struct wlfw_bdf_download_resp_msg_v01 resp = {};
+ 	struct wlfw_bdf_download_req_msg_v01 *req;
+ 	struct ath10k *ar = qmi->ar;
+@@ -249,15 +269,19 @@
+ 	if (!req)
+ 		return -ENOMEM;
+ 
+-	temp = ar->normal_mode_fw.board_data;
+-	remaining = ar->normal_mode_fw.board_len;
++	temp = data;
++	remaining = len;
+ 
+ 	while (remaining) {
+ 		req->valid = 1;
+ 		req->file_id_valid = 1;
+ 		req->file_id = 0;
+ 		req->total_size_valid = 1;
+-		req->total_size = ar->normal_mode_fw.board_len;
++		req->total_size = len;
++		if (bdf_type >= 0) {
++			req->bdf_type_valid = 1;
++			req->bdf_type = bdf_type;
++		}
+ 		req->seg_id_valid = 1;
+ 		req->data_valid = 1;
+ 		req->end_valid = 1;
+@@ -311,7 +335,7 @@
+ 		req->seg_id++;
+ 	}
+ 
+-	ath10k_dbg(ar, ATH10K_DBG_QMI, "qmi bdf download request completed\n");
++	ath10k_info(ar, "qmi blob download completed: %u bytes, bdf_type %d\n", len, bdf_type);
+ 
+ 	kfree(req);
+ 	return 0;
+@@ -845,10 +869,41 @@
+ 	if (ret)
+ 		return;
+ 
++	reinit_completion(&qmi->msa_ready_comp);
++	qmi->bdf_sent = false;
++
+ 	ret = ath10k_qmi_msa_ready_send_sync_msg(qmi);
+ 	if (ret)
+ 		goto err_setup_msa;
+ 
++	if (pre_bdf) {
++		const struct firmware *fw;
++
++		if (!wait_for_completion_timeout(&qmi->msa_ready_comp, msecs_to_jiffies(2000)))
++			ath10k_warn(ar, "pre_bdf: no MSA ready indication within 2 s\n");
++		if (pre_bdf == 1) {
++			ret = request_firmware(&fw, "ath10k/WCN3990/hw1.0/android/regdb.bin", ar->dev);
++			if (!ret) {
++				ret = ath10k_qmi_blob_dnld_send_sync(qmi, fw->data, fw->size, 4);
++				ath10k_info(ar, "pre_bdf: regdb.bin download ret %d\n", ret);
++				release_firmware(fw);
++			} else {
++				ath10k_warn(ar, "pre_bdf: no regdb.bin: %d\n", ret);
++			}
++		}
++		ret = request_firmware(&fw, "ath10k/WCN3990/hw1.0/android/bdf_gl.bin", ar->dev);
++		if (!ret) {
++			ret = ath10k_qmi_blob_dnld_send_sync(qmi, fw->data, fw->size, 0);
++			ath10k_info(ar, "pre_bdf: bdf_gl.bin download ret %d\n", ret);
++			release_firmware(fw);
++			if (!ret)
++				qmi->bdf_sent = true;
++		} else {
++			ath10k_warn(ar, "pre_bdf: no bdf_gl.bin: %d\n", ret);
++		}
++		ath10k_info(ar, "pre_bdf: sending the capability request now\n");
++	}
++
+ 	ret = ath10k_qmi_cap_send_sync_msg(qmi);
+ 	if (ret)
+ 		goto err_setup_msa;
+@@ -919,6 +974,11 @@
+ {
+ 	int ret;
+ 
++	if (qmi->bdf_sent) {
++		ret = ath10k_qmi_send_cal_report_req(qmi);
++		return;
++	}
++
+ 	ret = ath10k_qmi_fetch_board_file(qmi);
+ 	if (ret)
+ 		goto out;
+@@ -958,6 +1018,7 @@
+ {
+ 	struct ath10k_qmi *qmi = container_of(qmi_hdl, struct ath10k_qmi, qmi_hdl);
+ 
++	complete(&qmi->msa_ready_comp);
+ 	ath10k_qmi_driver_event_post(qmi, ATH10K_QMI_EVENT_MSA_READY_IND, NULL);
+ }
+ 
+@@ -1111,6 +1172,7 @@
+ 	INIT_LIST_HEAD(&qmi->event_list);
+ 	spin_lock_init(&qmi->event_lock);
+ 	INIT_WORK(&qmi->event_work, ath10k_qmi_driver_event_work);
++	init_completion(&qmi->msa_ready_comp);
+ 
+ 	ret = qmi_add_lookup(&qmi->qmi_hdl, QMI_SERVICE_ID_WLFW,
+ 			     WLFW_SERVICE_VERS_V01, 0);
+diff -ru a/drivers/net/wireless/ath/ath10k/qmi.h b/drivers/net/wireless/ath/ath10k/qmi.h
+--- a/drivers/net/wireless/ath/ath10k/qmi.h	2026-11-26 23:34:59.887067144 +0500
++++ b/drivers/net/wireless/ath/ath10k/qmi.h	2026-11-26 23:34:59.889881449 +0500
+@@ -108,6 +108,8 @@
+ 	struct ath10k_qmi_cal_data cal_data[MAX_NUM_CAL_V01];
+ 	bool msa_fixed_perm;
+ 	bool no_msa_ready_indicator;
++	struct completion msa_ready_comp;
++	bool bdf_sent;
+ 	enum ath10k_qmi_state state;
+ };
+ 
