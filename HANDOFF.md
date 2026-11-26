@@ -203,15 +203,54 @@ at-spi all come up and stay up. The only input is the volume key (`gpio-keys`) u
   `dbus-run-session`). `kmscon-console` must be stopped first (it holds DRM master on card0). Set
   `WLR_LIBINPUT_NO_DEVICES=1` while there is no touchscreen.
 
-### Touch: FocalTech FT5452 identified, driver and node prepared (not built or tested yet)
+### Touch: FocalTech FT5452 works (package r6)
 
 The stock tree lists a FocalTech node and a Himax node on `i2c@884000` (our `i2c1`, `gpio4`/`gpio5`). Reading the bus
-from userspace (`tools/i2cprobe.py`, with the IC powered and reset released by a test DTB) showed **0x38 ACKs with chip id
-`0xa3=0x54, 0x9f=0x52` = FT5452**, and 0x48 (Himax) does not answer. Reset is gpio88 (active low), interrupt gpio89
-(falling edge), the analog supply is gpio96 (a fixed regulator here) and the I/O rail is `vreg_l13a`; none of these pins is
-in the reserved set. The DTS has the node (`focaltech,ft5452`, 1080x2400), `gpi_dma0` and `qupv3_id_0` enabled, and the
-config has `TOUCHSCREEN_EDT_FT5X06=y` and `INPUT_EVDEV=y` (package r5). **None of this has been built or booted yet**; the
-test is that a touch input device appears in `/dev/input` and reports events (`tools/evrec.py`).
+from userspace (`tools/i2cprobe.py`) showed **0x38 ACKs with chip id `0xa3=0x54, 0x9f=0x52` = FT5452**, and 0x48
+(Himax) does not answer. Reset is gpio88 (active low), interrupt gpio89 (falling edge), the analog supply is gpio96 (a
+fixed regulator here) and the I/O rail is `vreg_l13a`. The DTS node is `focaltech,ft5452`, 1080x2400.
+
+**r5 had the device but the data was wrong.** `edt-ft5x06` bound as `generic ft5x06 (48)` and the interrupt fired, but the
+chip kept reporting one stale contact: about 100 interrupts/s at idle, coordinates at about 3 Hz, and **no lift ever**
+(one `BTN_TOUCH` in several minutes), so Phosh never saw a tap. The raw packet (read with `SLAVE_FORCE` over
+`/dev/i2c-N`, register 0 onwards: count at 0x02, then 6 bytes per point, flag in bits 7:6 of byte 3: 0 down, 1 up, 2
+contact) stayed `count=1 flag=2` after the finger left. Tried and ruled out: the interrupt trigger (`0xa4=01`, edge is
+right), monitor mode (`0xa5` goes to 0 while touched and back to 1 about 2 s after release), the register map (identical
+on slot A), a host firmware upload (the vendor driver also fails to load `focaltech_ts_fw_samsung.bin` and touch still
+works downstream).
+
+**Cause and fix.** The downstream driver (`drivers/input/touchscreen/ft3418_i2c`, repo `xiaomi-sdm678/android_kernel_xiaomi_mojito`
+at the commit pinned in `downstream/linux-xiaomi-mojito/APKBUILD`) reads the whole frame, 10 points x 6 + 3 = **63 bytes**,
+on every interrupt. Mainline's `edt_ft5452_data` has `max_support_points = 5` and reads 33 bytes, and the chip never
+advances its table. Slot A's interrupt count stays flat at idle; r5's did not. Patch `0004-Input-edt-ft5x06-read-all-10-points-on-the-FT5452.patch`
+sets it to 10. On r6 the idle interrupt count is 0, `TRACKING_ID`/`BTN_TOUCH` go down and up properly, and about 90
+position events/s arrive while touching. Phosh reacts to taps and swipes.
+
+### Phosh as a normal user (the lock screen needs a real password)
+
+`tools/run-phosh.sh` runs Phosh as root. Root is locked (`!` in `/etc/shadow`) and there is no `phosh` PAM service, so PAM
+falls through to `other` (deny all): **nothing can unlock the lock screen**. `tools/run-phosh-user.sh [seconds]` adds
+`/etc/pam.d/phosh` (includes `base-auth`, `base-account`, `base-password`, the same check as `login`), starts
+`seatd -g wheel` (the user is in `wheel`, so no group change is needed), makes `/dev/dri/renderD128` world readable
+(until reboot) and runs `phosh-session` as `user` under `timeout`. Unlock with the account's password. The old script has
+no timeout: kill `phoc` to end its session.
+
+### Other hardware found while here (all in the downstream device tree and live dump)
+
+- `i2c3` (`0x88c000`, the vendor kernel's "i2c2") is enabled in r6 and ACKs for `wl2866d` (0x28, camera LDO), `aw87xxx`
+  PA #1 (0x58, reg0 `0x59`) and `bq2597x` charge pump (0x65). **0x5b** (second PA) has `reset-gpio` tlmm 83 in the stock tree,
+  so it stays silent until a driver releases it, and **0x43** (`fsa4480` USB-C audio switch) is silent until its side is
+  powered. Probe with `tools/i2c3probe.py`. Mainline label mapping: vendor i2c0 `a84000` = `i2c5` (NFC `st21nfc` 0x08),
+  vendor i2c1 `884000` = `i2c1` (touch), vendor i2c2 `88c000` = `i2c3`.
+- Also enabled in r6: the PM6150L flash LED (`white:flash`, torch 300 mA / flash 1 A / 1.28 s) and the PMIC RTC (read
+  only like the vendor tree, which sets `qcom,qpnp-rtc-write = 0`; it reads 1970).
+- Audio, Wi-Fi and the modem need the remoteprocs first. The vendor ADSP boots from the `adsp.mdt` set already in
+  `/lib/firmware`; the codec is `wcd937x`, the amps `aw87xxx`, Wi-Fi/BT `wcn3990` (`bdwlan.*`, `*btfw*.tlv`), NFC `st21nfc`.
+  The downstream kernel has no working audio itself and no debugfs, so there is no live codec or clock state to copy.
+- Charging: the stock tree uses `smb5` plus `bq2597x`; mainline has nothing matching, so battery readouts need a new
+  driver or a fuel-gauge shim. Battery is a 5000 mAh Li-poly.
+- The downstream live device tree can be dumped from slot A (`/sys/firmware/devicetree/base`, decompile with `dtc -I fs`).
+  Keep such dumps out of the repo: they carry device identifiers.
 
 ### Display: the bootloader splash now stays up (simpledrm), login visible
 
@@ -298,10 +337,11 @@ phone (display, touch, Wi-Fi, modem, audio out work; GPU renders but hangs under
    apks on the PC (`pmbootstrap` or the edge mirror) and serve them over the USB link.
 2. **Display** through the real stack (the splash already works, see above): DPU, DSI host and PHY, and a DSI panel
    driver (generate it from the stock panel node with linux-mdss-dsi-panel-driver-generator).
-3. **Touch first** (prepared, see above): build r5, flash, check the input device, then try Phosh with a finger. After
-   that, with TLMM working and any pin outside gpio0-3 / gpio6-9 usable: panel reset/TE, charging
-   (PM6150 SMB5/QG is weak upstream), audio, Wi-Fi, modem, and finally KWin 6 and Finder.
-4. The kernel package (`7.4_rc4-r4`): patches 0001-0003, `QCOM_WDT=y`, `EFI_ZBOOT` off, raw `Image` installed as
+3. **Touch: done** (r6, see above). Next, with TLMM working and any pin outside gpio0-3 / gpio6-9 usable: panel reset/TE,
+   then the ADSP remoteproc on its own build (it is the audio/modem/Wi-Fi prerequisite and the likeliest to hang the boot,
+   like the secure-world pins did), then charging (smb5 + bq2597x have no mainline match), Wi-Fi, audio, and finally KWin 6
+   and Finder.
+4. The kernel package (`7.4_rc4-r6`): patches 0001-0004, `QCOM_WDT=y`, `EFI_ZBOOT` off, raw `Image` installed as
    `/boot/Image`, `LOCALVERSION=-sm6150`, and `DRM_MSM=m` (the modules are in the package). Its DTB has board-id `0 0`; `mk-bootimg-v2.sh` patches in
    `0x22` when packing. Patch 0001 is regenerated from `mainline/sm6150-xiaomi-mojito.dts`; for DTS-only
    changes use `build-dtb.sh` instead of rebuilding the package.
@@ -336,4 +376,4 @@ phone (display, touch, Wi-Fi, modem, audio out work; GPU renders but hangs under
 | `mainline/build-dtb.sh` | compiles the DTS to a DTB without rebuilding the kernel package (fast loop) |
 | `mainline/dummy-overlay.dts` | the dtbo experiment (ABL rejected it) |
 | `mainline/NOTES.md` | facts pulled from the stock device tree |
-| `tools/` | lpunpack.py (super.img), hwprobe.sh, evrec.py, vtype.py, gltest.py (off-screen OpenGL ES test on the render node), run-phosh.sh (start Phosh for 45 s), i2cprobe.py (probe the touch I2C bus) |
+| `tools/` | lpunpack.py (super.img), hwprobe.sh, evrec.py, vtype.py, gltest.py (off-screen OpenGL ES test on the render node), run-phosh.sh (Phosh as root, no lock-screen password works), run-phosh-user.sh (Phosh as `user` with a PAM service, takes a duration), i2cprobe.py (probe the touch I2C bus), i2c3probe.py (read-only probe of the chips on i2c3) |

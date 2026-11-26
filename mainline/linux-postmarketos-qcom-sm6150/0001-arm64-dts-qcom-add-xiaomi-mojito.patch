@@ -16,8 +16,8 @@ diff -urN a/arch/arm64/boot/dts/qcom/Makefile b/arch/arm64/boot/dts/qcom/Makefil
  dtb-$(CONFIG_ARCH_QCOM)	+= sm6350-sony-xperia-lena-pdx213.dtb
 diff -urN a/arch/arm64/boot/dts/qcom/sm6150-xiaomi-mojito.dts b/arch/arm64/boot/dts/qcom/sm6150-xiaomi-mojito.dts
 --- a/arch/arm64/boot/dts/qcom/sm6150-xiaomi-mojito.dts	1970-01-01 05:00:00.000000000 +0500
-+++ b/arch/arm64/boot/dts/qcom/sm6150-xiaomi-mojito.dts	2026-11-26 12:00:00.000000000 +0500
-@@ -0,0 +1,547 @@
++++ b/arch/arm64/boot/dts/qcom/sm6150-xiaomi-mojito.dts	2026-11-26 12:04:24.000000000 +0500
+@@ -0,0 +1,581 @@
 +// SPDX-License-Identifier: BSD-3-Clause
 +/*
 + * Xiaomi Redmi Note 10 (mojito / sunny), SM6150 "Talos".
@@ -34,6 +34,7 @@ diff -urN a/arch/arm64/boot/dts/qcom/sm6150-xiaomi-mojito.dts b/arch/arm64/boot/
 +
 +#include <dt-bindings/gpio/gpio.h>
 +#include <dt-bindings/input/linux-event-codes.h>
++#include <dt-bindings/leds/common.h>
 +#include <dt-bindings/pinctrl/qcom,pmic-gpio.h>
 +#include <dt-bindings/regulator/qcom,rpmh-regulator.h>
 +#include "talos.dtsi"
@@ -564,4 +565,37 @@ diff -urN a/arch/arm64/boot/dts/qcom/sm6150-xiaomi-mojito.dts b/arch/arm64/boot/
 +		touchscreen-size-x = <1080>;
 +		touchscreen-size-y = <2400>;
 +	};
++};
++
++/*
++ * i2c3 (0x88c000; the vendor kernel calls it i2c2) carries the two Awinic
++ * aw87xxx speaker amplifiers (0x58, 0x5b), the FSA4480 USB-C audio switch
++ * (0x43), the BQ2597x charge pump (0x65) and the camera regulator (0x28).
++ * No client drivers are bound yet: enabling the bus lets /dev/i2c-N probe them.
++ */
++&i2c3 {
++	clock-frequency = <400000>;
++	status = "okay";
++};
++
++/* Camera flash LED (PM6150L). Vendor limits: torch 500 mA, flash 1.5 A, 1.28 s. */
++&pm6150l_flash {
++	status = "okay";
++
++	led-0 {
++		function = LED_FUNCTION_FLASH;
++		color = <LED_COLOR_ID_WHITE>;
++		led-sources = <1>;
++		led-max-microamp = <300000>;
++		flash-max-microamp = <1000000>;
++		flash-max-timeout-us = <1280000>;
++	};
++};
++
++/*
++ * The RTC is read-only (the vendor tree sets qcom,qpnp-rtc-write = 0): no
++ * allow-set-time, so the kernel only reads the time the firmware keeps.
++ */
++&pm6150_rtc {
++	status = "okay";
 +};

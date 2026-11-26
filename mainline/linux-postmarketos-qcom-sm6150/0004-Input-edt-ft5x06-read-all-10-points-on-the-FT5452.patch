@@ -1,0 +1,26 @@
+From: mojito-mainline <noreply@anthropic.com>
+Subject: [PATCH] Input: edt-ft5x06 - read all 10 points on the FT5452
+
+The FT5452 in the Redmi Note 10 (mojito) only advances its touch table
+after the host reads the full 63-byte, 10-point frame, as the vendor fts
+driver does. With the 5-point read the chip keeps raising its interrupt,
+reports a stale contact and never signals the release.
+
+Signed-off-by: mojito-mainline <noreply@anthropic.com>
+---
+--- a/drivers/input/touchscreen/edt-ft5x06.c	2026-11-26 11:58:10.788344166 +0500
++++ b/drivers/input/touchscreen/edt-ft5x06.c	2026-11-26 11:58:10.820194347 +0500
+@@ -1459,7 +1459,12 @@
+ };
+ 
+ static const struct edt_i2c_chip_data edt_ft5452_data = {
+-	.max_support_points = 5,
++	/*
++	 * The Redmi Note 10 panel's FT5452 keeps reporting a stale contact and
++	 * never releases it unless the whole 10-point frame (63 bytes) is read,
++	 * as the vendor driver does.
++	 */
++	.max_support_points = 10,
+ };
+ 
+ static const struct edt_i2c_chip_data edt_ft5506_data = {
