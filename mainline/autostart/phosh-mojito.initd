@@ -1,0 +1,28 @@
+#!/sbin/openrc-run
+# Phosh on the msm display, started by auto-logging the user in on tty1.
+#
+# Why a real login and not "su": brightness (and the polkit agent) go through logind, and logind refuses
+# ("Your session has no seat") for a session that was not logged in on a terminal of seat0. Logging in on tty1
+# through login(1) gives the session seat0/tty1, so Phosh's backlight control works. ~/.profile.phosh starts the
+# session on tty1 only. The text console (kmscon-console) holds the display (DRM master), so the installer removes
+# it from the default runlevel; bring it back with:  rc-service phosh-mojito stop; rc-service kmscon-console start
+name="phosh-mojito"
+description="Phosh session on the msm display (auto-login on tty1)"
+
+command="/sbin/getty"
+command_args="-n -l /usr/local/libexec/phosh-autologin 38400 tty1"
+command_background="yes"
+pidfile="/run/${RC_SVCNAME}.pid"
+
+depend() {
+	need dbus seatd elogind
+	after udev-settle udev-postmount local
+}
+
+start_pre() {
+	rc-service -q kmscon-console stop >/dev/null 2>&1
+	# the session log; /run/user is created by pam_rundir at login, but do not depend on that
+	mkdir -p /run/user
+	checkpath -d -m 0700 -o 10000:10000 /run/user/10000
+	checkpath -f -m 0666 /var/tmp/phosh-mojito.log
+}

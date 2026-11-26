@@ -1,0 +1,3 @@
+#!/bin/sh
+# Login program for getty -n on tty1: log the user in without a password prompt (see phosh-mojito.initd).
+exec /bin/login -f user

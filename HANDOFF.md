@@ -236,6 +236,28 @@ falls through to `other` (deny all): **nothing can unlock the lock screen**. `to
 (until reboot) and runs `phosh-session` as `user` under `timeout`. Unlock with the account's password. The old script has
 no timeout: kill `phoc` to end its session.
 
+### Phosh starts on boot and controls the brightness (`mainline/autostart/`, `tools/install-phosh-autostart.sh`)
+
+`PHONE_PW=... tools/install-phosh-autostart.sh` installs an OpenRC service `phosh-mojito` that auto-logs `user` in on `tty1`
+(`getty -n -l phosh-autologin` -> `login -f user`); `~/.profile.phosh` then starts `phosh-mojito-session`, which waits for the msm
+KMS card (the one with a DSI connector, found by name, not by number) and runs `phosh-session` on it with `renderD128` for
+rendering. It also enables `elogind`, removes `kmscon-console` from the default runlevel (the text console holds DRM
+master; restore it with `rc-service phosh-mojito stop; rc-service kmscon-console start`) and adds `user` to `seat`. Unlock with
+the account password (PAM service `/etc/pam.d/phosh`). Phosh's brightness slider writes the DCS backlight and works.
+
+Every one of these cost a boot cycle, so they are recorded:
+
+1. **Brightness needs a logind session on a seat.** Phosh sets the backlight through `login1.Session.SetBrightness`; without it
+   the log says `NotYourDevice: Your session has no seat`. A session started with `su`/`su -l` or OpenRC's `command_user` has
+   no seat. A real login on a terminal of `seat0` (here `tty1`) does. elogind must be running.
+2. **OpenRC's `command_user` drops supplementary groups**, so phoc could not open `/run/seatd.sock` (group `seat`): launch through
+   `su`/`login`, which set them. OpenRC's `command_user` also opens the log file only after dropping to the user.
+3. **OpenRC ignored the new service because the phone's clock is stuck in 1970.** The cached dependency tree
+   (`/var/cache/rc/deptree`) looked newer than the new init script, so the service was never in the runlevel graph (0 matches in
+   the cache; `openrc default` printed nothing). Run `rc-update -u` after installing any service (the installer does).
+4. `checkpath -d` does not create parent directories and `/run/user` does not exist on this image (it says `could not open user`).
+5. `supervise-daemon` silently failed to start the child here; use the plain background launcher.
+
 ### Other hardware found while here (all in the downstream device tree and live dump)
 
 - `i2c3` (`0x88c000`, the vendor kernel's "i2c2") is enabled in r6 and ACKs for `wl2866d` (0x28, camera LDO), `aw87xxx`
@@ -373,7 +395,7 @@ phone (display, touch, Wi-Fi, modem, audio out work; GPU renders but hangs under
    (turnip) if wanted. `kmscube`, `eglinfo`, `phoc` and `phosh` are not installed and the phone has no internet; fetch the
    apks on the PC (`pmbootstrap` or the edge mirror) and serve them over the USB link.
 2. **Display: done** (see above). Next: run Phosh on the msm KMS device (`WLR_DRM_DEVICES` = the msm card, `renderD128` for rendering,
-   no simpledrm) and then KWin/Finder; `tools/run-phosh*.sh` still point at simpledrm's `card0`.
+   no simpledrm) and then KWin/Finder; `tools/run-phosh*.sh` still point at simpledrm's `card0`; the autostart above is the supported way to start Phosh now.
 3. **Touch: done** (r6, see above). Next, with TLMM working and any pin outside gpio0-3 / gpio6-9 usable: panel reset/TE,
    then the ADSP remoteproc on its own build (it is the audio/modem/Wi-Fi prerequisite and the likeliest to hang the boot,
    like the secure-world pins did), then charging (smb5 + bq2597x have no mainline match), Wi-Fi, audio, and finally KWin 6

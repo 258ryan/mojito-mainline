@@ -1,0 +1,22 @@
+#!/bin/sh
+# Wait for the msm display (the DRM card that has a DSI connector), then run Phosh on it.
+# The display driver appears ~10 s after boot, so the wait is part of the session, not of the boot.
+export XDG_RUNTIME_DIR=/run/user/$(id -u) HOME=/home/user
+export LIBSEAT_BACKEND=seatd XDG_SESSION_TYPE=wayland XDG_CURRENT_DESKTOP=Phosh:GNOME
+export WLR_BACKENDS=drm,libinput WLR_RENDERER=gles2 WLR_LIBINPUT_NO_DEVICES=1
+
+KMS=
+i=0
+while [ $i -lt 90 ]; do
+	for c in /sys/class/drm/card?; do
+		ls "$c" 2>/dev/null | grep -q -- '-DSI-' && KMS=/dev/dri/$(basename "$c")
+	done
+	[ -n "$KMS" ] && [ -e /dev/dri/renderD128 ] && break
+	sleep 1
+	i=$((i + 1))
+done
+[ -n "$KMS" ] || { echo "$(date +%T) no DSI display found after 90 s"; exit 1; }
+
+export WLR_DRM_DEVICES=$KMS WLR_RENDER_DRM_DEVICE=/dev/dri/renderD128
+echo "$(date +%T) starting phosh-session on $KMS (render: $WLR_RENDER_DRM_DEVICE)"
+exec /usr/bin/phosh-session

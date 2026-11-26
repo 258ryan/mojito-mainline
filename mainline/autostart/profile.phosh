@@ -1,0 +1,4 @@
+# Sourced from ~/.profile: start the Phosh session on tty1 (the auto-login), never on SSH or other terminals.
+if [ "$(tty)" = /dev/tty1 ] && [ -z "$WAYLAND_DISPLAY" ]; then
+	exec /usr/local/libexec/phosh-mojito-session >> /var/tmp/phosh-mojito.log 2>&1
+fi
