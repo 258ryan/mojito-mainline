@@ -18,6 +18,9 @@
 #include <dt-bindings/leds/common.h>
 #include <dt-bindings/pinctrl/qcom,pmic-gpio.h>
 #include <dt-bindings/regulator/qcom,rpmh-regulator.h>
+#include <dt-bindings/soc/qcom,apr.h>
+#include <dt-bindings/sound/qcom,q6afe.h>
+#include <dt-bindings/sound/qcom,q6asm.h>
 #include "talos.dtsi"
 #include "pm6150.dtsi"
 #include "pm6150l.dtsi"
@@ -242,10 +245,15 @@
 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
 		};
 
+		/*
+		 * 1.8 V I/O for the WCN3990 (Wi-Fi/Bluetooth), always on in the stock tree; nothing in
+		 * Linux votes for it, and without it the WLFW host capability request fails (QMI 90).
+		 */
 		vreg_l10a: ldo10 {
 			regulator-min-microvolt = <1800000>;
 			regulator-max-microvolt = <1829000>;
 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+			regulator-always-on;
 		};
 
 		vreg_l11a: ldo11 {
@@ -452,6 +460,85 @@
 &remoteproc_adsp {
 	firmware-name = "postmarketos/adsp.mdt";
 	status = "okay";
+};
+
+/*
+ * Audio services on the ADSP: legacy APR (the firmware offers "apr_audio_svc"), replacing talos.dtsi's
+ * AudioReach gpr node, which this firmware never answers. Layout as in the Redmi Note 7 Pro port, with
+ * the protection domains declared (pd-mapper works here, patch 0011). ASM shared memory goes through
+ * SMMU stream 0x1721 (stock msm_audio_ion), which needs patch 0014 (hypervisor-owned context banks).
+ */
+/delete-node/ &gpr;
+
+&glink_edge {
+	apr {
+		compatible = "qcom,apr-v2";
+		qcom,glink-channels = "apr_audio_svc";
+		qcom,domain = <APR_DOMAIN_ADSP>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		service@3 {
+			compatible = "qcom,q6core";
+			reg = <APR_SVC_ADSP_CORE>;
+			qcom,protection-domain = "avs/audio", "msm/adsp/audio_pd";
+		};
+
+		q6afe: service@4 {
+			compatible = "qcom,q6afe";
+			reg = <APR_SVC_AFE>;
+			qcom,protection-domain = "avs/audio", "msm/adsp/audio_pd";
+
+			q6afedai: dais {
+				compatible = "qcom,q6afe-dais";
+				#address-cells = <1>;
+				#size-cells = <0>;
+				#sound-dai-cells = <1>;
+			};
+
+			q6afecc: clock-controller {
+				compatible = "qcom,q6afe-clocks";
+				#clock-cells = <2>;
+			};
+		};
+
+		q6asm: service@7 {
+			compatible = "qcom,q6asm";
+			reg = <APR_SVC_ASM>;
+			qcom,protection-domain = "avs/audio", "msm/adsp/audio_pd";
+
+			q6asmdai: dais {
+				compatible = "qcom,q6asm-dais";
+				#address-cells = <1>;
+				#size-cells = <0>;
+				#sound-dai-cells = <1>;
+				iommus = <&apps_smmu 0x1721 0x0>;
+
+				dai@0 {
+					reg = <MSM_FRONTEND_DAI_MULTIMEDIA1>;
+				};
+
+				dai@1 {
+					reg = <MSM_FRONTEND_DAI_MULTIMEDIA2>;
+				};
+
+				dai@2 {
+					reg = <MSM_FRONTEND_DAI_MULTIMEDIA3>;
+				};
+			};
+		};
+
+		q6adm: service@8 {
+			compatible = "qcom,q6adm";
+			reg = <APR_SVC_ADM>;
+			qcom,protection-domain = "avs/audio", "msm/adsp/audio_pd";
+
+			q6routing: routing {
+				compatible = "qcom,q6adm-routing";
+				#sound-dai-cells = <0>;
+			};
+		};
+	};
 };
 
 &pil_gpu_mem {

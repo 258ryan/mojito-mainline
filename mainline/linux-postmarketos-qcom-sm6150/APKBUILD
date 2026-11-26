@@ -3,7 +3,7 @@ maintainer=""
 _flavor="postmarketos-qcom-sm6150"
 pkgname=linux-$_flavor
 pkgver=7.4_rc4
-pkgrel=22
+pkgrel=23
 pkgdesc="Mainline kernel for SM6150 devices"
 arch="aarch64"
 _carch="arm64"
@@ -44,6 +44,7 @@ source="
 	0011-soc-qcom-pd-mapper-one-entry-per-domain-on-qcs615-match-sm6150.patch
 	0012-rpmsg-glink-early-intents-and-intent-req-reuse.patch
 	0013-pmdomain-qcom-rpmhpd-add-mss-to-qcs615.patch
+	0014-iommu-arm-smmu-qcom-reserve-hyp-owned-context-banks-on-qcs615.patch
 "
 builddir="$srcdir/linux-${pkgver/_/-}"
 
@@ -83,7 +84,7 @@ package() {
 sha512sums="
 df2d9560c6da42cf3620d7abb6b4070c86165b46c6e686f94c4585fc3b887d30cc38550390b1be2dccdafe226ad60f1e5604c080853c25da618a74d38bb75c28  linux-postmarketos-qcom-sm6150-v7.4-rc4.tar.gz
 b931820e6f1bbf6ac2bfc252d3cf9ae31ea45edeac98da8a955a838f76f74fc6ced360421c60fa2ac85d2a262b114fbb12f387a702e237276b748d0886c5e41b  config-postmarketos-qcom-sm6150.aarch64
-7937d239f40e6ee91dd6b04991b7b3fb4f68d50fd3ced4823ff44b84a62608e3207fb214b3fa1a75e32c29221a9d6f562bd65248872d3e2d2e6664e7abfb1d8c  0001-arm64-dts-qcom-add-xiaomi-mojito.patch
+cf293129528a332196ae1445e86da9d7c3097878f9300022856bf314ae7adb05740fda8f13ac1b23e832807deb7960cb40a195414631744306ea0aef097ac243  0001-arm64-dts-qcom-add-xiaomi-mojito.patch
 61202bda639a577e543975b72e66be7d0b49b0d2349b100fadfc9500e1c8059ef48b5156fa7b83a7eca41d9b87752d210ae1e0a400a68374b32a4f9446ce5a3e  0002-firmware-qcom-tzmem-do-not-use-the-SHM-bridge-on-sm6150.patch
 278eecc64de52cf3fb75be386f8a6f947e9cf2e6a63a311647d63aa7ae5b4578446630ea381bbd74d52184db2f40342cfaa152d1fbb1dfbf4f30d12e0b5bdd97  0003-interconnect-qcom-qcs615-add-the-ACV-enable-mask.patch
 4a0379e92816d74b57f94d14baecf51dff71b28f05d1f4d01c81bb01cec7745d2973cc9ba542308490c4cecb318d86f227717be341b1e4c8fed7a5480d0dbb07  0004-Input-edt-ft5x06-read-all-10-points-on-the-FT5452.patch
@@ -96,4 +97,5 @@ bbae2fdf63ec9f8de7ec9eecdd77e82e610075ae51f8c046a14af7b50f8faddd06aff2cab64b183b
 d22188c2c03a4aede0e7bd1f612cd63d0d6404aff8aebaa9c7cb76b7f3cfdd5d0ae4ced6f12143cfa63c98a79d00525e884381cb2c8b35ce03ae7e5dfd47f866  0011-soc-qcom-pd-mapper-one-entry-per-domain-on-qcs615-match-sm6150.patch
 48d38ca530c7df4d15d51e5006de1ccb2d23dd082b53cf815fe64c5be44977ab06b2a7b879192a255a819924e0158d6dbba2a7b9cc61c03dac7a246d37b82b00  0012-rpmsg-glink-early-intents-and-intent-req-reuse.patch
 e83d331928cb14c7e6978710dcf2a1182725c0e835456ce23f99ec9262b9376070141a364fd9fe52f439c75f256e5b317c00e4d935f70be0ae2f48862a697480  0013-pmdomain-qcom-rpmhpd-add-mss-to-qcs615.patch
+af7dbecb52df628d56211938a665ef1080e67378efe032b1779a8abcc6d586bd07067e9443b0a729d449d8c2da5c6d561aeb54f41c7adb2c8467d64bcb315f2e  0014-iommu-arm-smmu-qcom-reserve-hyp-owned-context-banks-on-qcs615.patch
 "

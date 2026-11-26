@@ -20,7 +20,8 @@ charging (SMB5), the ADSP, and the modem: LTE registration, mobile data (IPv4 + 
   (modemst1/2, fsg, fsc) exists on the PC, outside the repo (it carries device identifiers).
 - The clock is only right after an NTP sync over LTE (`ntpd -q -n -p pool.ntp.org`); there is no time sync at boot yet.
 
-**Suggested order from here:** (1) Wi-Fi: node and firmware are in place but the WLFW handshake fails (see "Wi-Fi"); (2) audio: ADSP speaks **legacy APR**
+**Suggested order from here:** (1) Wi-Fi: node and firmware are in place but the WLFW handshake fails (see "Wi-Fi"); (2) audio: APR services work (stage 1, r23); the SoundWire/WCD937x path needs an SM6150 LPASS LPI pin driver (port
+sm7150-mainline's `pinctrl-sm7150-lpass-lpi.c`; the LPI block is at **0x62b52000**, 0x62b40000 is the SSC block that hangs); ADSP speaks **legacy APR**
 (channels `apr_audio_svc`, `apr_apps2`), not AudioReach, so it needs APR nodes + `qcom,sm8250-sndcard`, and very likely the SMMU
 patch 0017 of the violet port (hyp-owned context banks) before any stream; then call audio (`q6voiced`); (3) time sync at boot;
 (4) KWin/Finder smoke test; (5) suspend.
@@ -510,9 +511,18 @@ ath10k reaches the modem's WLFW service (QMI 69), then:
   it, and the loop repeats; cleanup prints `failed to unmap msa permissions: -22` (a consequence, not the cause);
 - `qcom,msa-fixed-perm` **hangs the boot** in udev ("waiting for uevents") even with ath10k blacklisted: do not use it;
 - 1 MB vs 2 MB MSA: no difference. ath10k's QMI code is identical between 7.2 (Note 7 Pro, Wi-Fi works) and 7.4.
-Next ideas: log which files the modem fetches through tqftpserv (its printf output is block-buffered, run it under a pty);
-compare with the Note 7 Pro's file layout (`qcom/qcs615/...`); check whether the WLAN PD needs a servreg/PDR step before WLFW
-answers; then violet's ath10k patches 0010/0015 (those address later failures: quiet mode, station vdev start).
+Later tests (2026-11-26 evening):
+- **L10a (1.8 V, the WCN I/O rail, always on in the stock tree) was unpowered**: nothing in Linux votes for it. With
+  `regulator-always-on` the host capability request passes without any quirk (error 90 = "incompatible state" is gone). Kept in the DTS.
+- Still `capability req rejected: 119` afterwards, unchanged by: `RPMH_RF_CLK2` as `cxo_ref_clk_pin`; all WCN rails at the stock
+  voltages (L9a cx-mx 640 mV as `qcom,vdd-cx-mx-config`, L1c 1.8, L2c 1.304, L10c 3.304) and always on before the modem boots. The board
+  has no ch1 rail (stock BT and icnss use L1c/L2c/L10c only); SID 0x1640 is the stock value (SM7150 uses 0x240).
+- `tqftpserv -d` (run under `script` so the output is flushed): the modem requests only `/readwrite/server_check.txt` and
+  `ota_firewall/ruleset` at boot and nothing when WLAN starts, so the WLAN image is inside the modem firmware here.
+- **Do not restart the modem (`rc-service rmtfs restart`) while IPA is set up**: the modem asserts in `ipa_hal.c` (GSI) and IPA then
+  times out (-110); `rmmod ath10k_snoc` hangs afterwards. Reboot instead.
+- Reference with working WCN3990 on the same family: sm7150-mainline/linux (Xiaomi sweet/davinci) uses a `qcom,wcn3998-pmu` node
+  (swctrl GPIO, vddio) and no quirks. Remaining ideas: compare the WLFW capability request bytes with what the stock icnss sends.
 
 ### Phosh: display corners and the camera cutout (`mainline/gmobile/`)
 
