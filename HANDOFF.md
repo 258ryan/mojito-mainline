@@ -712,6 +712,16 @@ Later tests (2026-11-26 evening):
   build than this phone's ROM (V14.0.9.0: nearly all modem.b* segments, modem.mdt, wlanmdsp.mbn, adsp.mdt, cdsp.mdt differ). Replaced modem.* + wlanmdsp.mbn
   with the ROM's own (stock/extract/fwall; package copies kept in /lib/firmware/postmarketos-pkg-backup/): the modem and LTE (rmnet_ipa0) work, still 119.
   The phone now runs the ROM's modem + wlanmdsp (an `apk upgrade` of the firmware package would put the package ones back).
+  (E) **modem file requests (tqftpserv -d, rmtfs -v at boot; logs in the private dir modem-requests-pmos/):** the modem asks for
+  /readwrite/server_check.txt (write), /readwrite/{mcfg,lctoem}.tmp (r/w), /readwrite/ota_firewall/ruleset (missing, rejected),
+  /readonly/vendor/firmware_mnt/image/wlanmdsp.mbn (3x) and **/readonly/firmware/image/modem_pr/mcfg/configs/mcfg_{hw,sw}/mbn_{hw,sw}.dig, which pmOS
+  REJECTED (no modem_pr tree)**; rmtfs serves modem_fs1/fs2/fsg. Installed the ROM's modem_pr tree (242 files, from NON-HLOS.bin image/modem_pr via mcopy)
+  into /lib/firmware/postmarketos/modem_pr: both digests are now served, the modem reads no MBN after them (the EFS from Android already holds the
+  matching MCFG), and Wi-Fi is still 119. So MCFG is not the cause; modem_pr stays installed for parity.
+  (F) **TrustZone MSA assign compared: identical.** Android trace: 2x SCM 0x42000c16 (SIP svc 0x0c MP, cmd 0x16 = MP_ASSIGN, arginfo 0x1117 = 7 args
+  RO/VAL/RO/VAL/RO/VAL/VAL, same as mainline qcom_scm_assign_mem), one per MSA region. Stock icnss (fiqri tree icnss.c msa_perm_list/secure_list) and
+  ath10k qmi.c map the same way: HLOS(0x3) -> MSS_MSA(0xF) RW + WLAN(0x18) RW, plus WLAN_CE(0x19) RW for non-secure regions; same VMID/PERM values
+  (secure_buffer.h vs dt-bindings/firmware/qcom,scm.h); same point in the sequence (after msa_info, before msa_ready). Our assigns succeed.
   => The difference is on the MODEM side, not in anything the AP drives: same wlanmdsp.mbn, but the modem image/config, EFS, or the services the modem talks
   to differ between MIUI and pmOS. Next: compare the QMI/QRTR service list and the modem's tftp/rmtfs file requests under MIUI vs pmOS, and the modem firmware
   files actually loaded (MIUI loads them from /vendor/firmware_mnt, pmOS from /lib/firmware/postmarketos: compare checksums of modem.* and the mcfg/mbn set).
