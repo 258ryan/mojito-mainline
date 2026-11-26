@@ -1,0 +1,14 @@
+{
+  "name": "Xiaomi Redmi Note 10",
+  "x-res": 1080,
+  "y-res": 2400,
+  "width": 67,
+  "height": 149,
+  "corner-radii": [119, 119, 119, 119],
+  "cutouts": [
+    {
+      "name": "camera",
+      "path": "M 503,52 a 37,37 0 1,0 74,0 a 37,37 0 1,0 -74,0 Z"
+    }
+  ]
+}

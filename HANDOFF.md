@@ -37,7 +37,12 @@ Lessons (each cost a freeze/boot):
 - A `modprobe ath10k_snoc` that never returns holds the module lock: `lsmod`, udev and reads of `/proc/<pid>` hang, the phone slowly locks up.
 - The freezes on the Phosh boots happened even with Wi-Fi not loaded yet (last line: session start at ~31 s, USB link drops); without
   greetd the same bring-up never froze. Suspects: gmobile r1 (local cutout build, installed just before the freezes started) and
-  plymouth staying attached (quitting it once un-froze the screen). **greetd is currently disabled on the phone** (`rc-update add greetd default` to undo).
+  plymouth staying attached. **Resolved: it was gmobile 0.7.5-r1** (the local build with the mojito panel compiled in): with Alpine's
+  stock r0 the same Phosh boot (plymouth still running) is stable, Wi-Fi/BT/LTE up. The cutout data now comes from
+  `rootfs/usr/share/gmobile-mojito/display-panels/xiaomi,mojito.json` via `G_RESOURCE_OVERLAYS` (`rootfs/etc/profile.d/gmobile-mojito.sh`);
+  do not install the r1 build. greetd is enabled again.
+- **Sensors now work as a side effect:** with the sensor PD served, iio-sensor-proxy (libssc) reports an accelerometer and ambient
+  light; Phosh auto-rotates. Orientation test (upright/upside-down/left/right) matched without a mount matrix.
 - busybox `grep` has no `--line-buffered`; a `dmesg -w | grep ...` capture silently records nothing. Stream raw `dmesg -w` instead.
 
 **Bluetooth WORKS too (2026-11-27):** the chip is a **WCN3950**, so the node must be `qcom,wcn3950-bt` (7.4 has it; loads
