@@ -3,7 +3,27 @@
 For the next agent picking this up. Read the START HERE section, then the rest as needed, before touching the phone.
 State as of 2026-11-27 (Wi-Fi work 2026-11-26/27).
 
-## *** 2026-11-27: Wi-Fi cause found on stock; fix NOT yet verified on pmOS (read this first) ***
+## *** 2026-11-27 (later): Wi-Fi WORKS on mainline; Phosh back (read this first) ***
+
+Verified on the phone (slot B, r21 kernel, cold boot, nothing by hand): `wlan0` comes up, scans (2.4 GHz seen), associates and gets
+an address via NetworkManager; LTE stays connected; Phosh 0.59 (greetd/phrog) runs.
+
+- **Recipe:** start `hexagonrpcd -f /dev/fastrpc-adsp-secure -d adsp -s -R /usr/share/qcom/sm6150/Xiaomi/mojito` (root: the node is 0600),
+  wait until its file traffic stops (~37 s after start on a clean boot), **then** load `ath10k_snoc` once. Done at boot by
+  `mainline/rootfs/etc/init.d/mojito-wifi` (in runlevel default; `ath10k_snoc` stays blacklisted for udev autoload).
+- **Timing matters:** QMI service 400 (sensor core) registers immediately, so it is NOT a readiness signal. Loading ath10k early gives 119
+  again (three times in the first test), and the first success after those firmware restarts then failed with `failed to connect htt (-110)`
+  (CE interrupts never fired, "polling.."). A fresh `rmmod`/`modprobe` then worked, and a clean boot with the wait works first time.
+- The hexagonrpcd messages `Could not open .../sns_reg_version` and ~1600 `Tried to open .../temp.json for writing` are **normal**:
+  hexagonrpcd 0.4.0 rejects every write (`AEE_EUNSUPPORTED`, `hexagonrpcd/apps_std.c`) and only maps `registry/registry`.
+- MAC address is random each boot (`invalid MAC address; choosing random`): still to fix (stock reads it from persist/NV).
+- **Rootfs was only 917 MB** (the first-boot resize did not run on the loop-in-userdata layout); grown online on the phone with
+  `sfdisk --relocate gpt-bak-std /dev/loop0; echo ", +" | sfdisk -N 2 --no-reread --no-tell-kernel /dev/loop0; partx -u -n 2 /dev/loop0;
+  resize2fs /dev/loop0p2` (now 101 GB). A clean install will need this fixed in the initramfs hook.
+- **Not yet reproducible from a clean build:** there is no mainline device package; slot B is still assembled by hand (kernel package +
+  `mk-bootimg-v2.sh` + packages/blobs/config copied over SSH, see "REINSTALLED" below).
+
+## 2026-11-27: Wi-Fi cause found on stock (the analysis that led to the fix above)
 
 Controlled tests on stock MIUI (same phone, recorder kernel, one change per boot) showed the WLAN capability request depends on the **ADSP sensor PD file server**:
 

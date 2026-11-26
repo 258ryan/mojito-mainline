@@ -1,0 +1,31 @@
+#!/sbin/openrc-run
+# Redmi Note 10 (mojito/sunny) Wi-Fi: the modem's WLAN firmware rejects the capability request (error 119)
+# until the ADSP sensor PD has been served its files by hexagonrpcd, so load ath10k_snoc only after the
+# sensor PD's file traffic has settled (~40 s). ath10k_snoc stays blacklisted for udev autoload.
+name="mojito Wi-Fi (sensorspd + ath10k)"
+supervisor=supervise-daemon
+command=/usr/bin/hexagonrpcd
+command_args="-f /dev/fastrpc-adsp-secure -d adsp -s -R /usr/share/qcom/sm6150/Xiaomi/mojito"
+output_log=/var/log/hexagonrpcd-sensorspd.log
+error_log=/var/log/hexagonrpcd-sensorspd.log
+
+depend() {
+	need rmtfs
+	after tqftpserv
+}
+
+start_pre() {
+	: > /var/log/hexagonrpcd-sensorspd.log
+	for i in $(seq 1 60); do qrtr-lookup 2>/dev/null | awk '$1==69' | grep -q . && return 0; sleep 1; done
+	ewarn "WLAN firmware service (69) not seen"
+}
+
+start_post() {
+	( last=-1; quiet=0
+	  for i in $(seq 1 240); do
+		n=$(wc -l < /var/log/hexagonrpcd-sensorspd.log)
+		[ "$n" = "$last" ] && quiet=$((quiet+1)) || quiet=0; last=$n
+		[ $quiet -ge 6 ] && break; sleep 0.5
+	  done
+	  modprobe ath10k_snoc ) >/dev/null 2>&1 &
+}
