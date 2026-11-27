@@ -17,6 +17,14 @@ recovered by itself on the r28 boot (Wi-Fi ~60 s, mobile data connected); on the
 with the stock hexagonrpcd. Unproven idea: this boot-order wait and the modem's start-up race each other. Next: compare dmesg
 and service start times of good and bad boots.
 
+### Workarounds: progress
+- RX HPH Mode: patch 0019 fixes the enum names, UCM now sets `CLS_AB` by name (pkgrel=29, NOT BUILT; install kernel and UCM
+  together: on older kernels the name selects the wrong mode, so keep the numeric UCM until r29 is on the phone).
+- `clk_ignore_unused pd_ignore_unused`: audit started. Clocks hardware-on with enable count 0 include display (dsi0pll*,
+  disp_cc_mdss_*), `ipa`, LPASS MI2S/TDM ids, rf_clk*/ln_bb_clk*, UFS/USB phy symbol and clkref clocks; full dump
+  `clk_summary-r28.txt` in the private audio-speaker folder. Genpd: only the MMU TBU vote GDSCs are on without a user.
+  Next: remove one flag at a time from the boot cmdline and keep the previous boot image for rollback.
+
 ### Workarounds to replace (user wants as few as possible)
 No device package (hand-copied files, borrowed downstream initramfs); hexagonrpcd patch discards writes (should store them);
 log-quiet readiness + module blacklists in mojito-wifi/mojito-sensors; `clk_ignore_unused pd_ignore_unused`; plain wallpaper

@@ -3,7 +3,7 @@ maintainer=""
 _flavor="postmarketos-qcom-sm6150"
 pkgname=linux-$_flavor
 pkgver=7.4_rc4
-pkgrel=28
+pkgrel=29
 pkgdesc="Mainline kernel for SM6150 devices"
 arch="aarch64"
 _carch="arm64"
@@ -49,6 +49,7 @@ source="
 	0016-ASoC-codecs-add-an-AW87xxx-amplifier-driven-by-a-register-sequence.patch
 	0017-ASoC-codecs-wcd937x-count-every-user-of-the-RX-clock.patch
 	0018-ASoC-codecs-lpass-rx-macro-set-the-AUX-DLY_Z-enable-bit.patch
+	0019-ASoC-codecs-wcd937x-make-the-RX-HPH-Mode-names-match-the-values.patch
 "
 builddir="$srcdir/linux-${pkgver/_/-}"
 
@@ -106,4 +107,5 @@ e48f9fa7e681bf297eeedeaae816a28044ce77d9ef47e264b79d60bc75bcbbffea093c588f16e19f
 5e11104d8f4cfe1f3362083b874e7d2903f417a13f157ea111585e3a9ade48ceed2b66681d7567d8ca7ba0694cd0d1d2af1dae5ca7751e8f2272be524f7eab62  0016-ASoC-codecs-add-an-AW87xxx-amplifier-driven-by-a-register-sequence.patch
 9b6b0670fda6427064a029d632e11972a280628dcde94d92ea4749a841595cdb5f7da59ac3eaf526ab5da2bc3ace80c2af278961defd3c41468a36f51ea11101  0017-ASoC-codecs-wcd937x-count-every-user-of-the-RX-clock.patch
 fe45d9580689468da8a8655aa9377097f512d49e8fa047d8555403b0d6fe146a828e628fe384a80aab9192c3e291795905d0fb5edb99397c4e532aa7bd0e7197  0018-ASoC-codecs-lpass-rx-macro-set-the-AUX-DLY_Z-enable-bit.patch
+d7b28e122f11ccdcf38c3bd64fee877c3985af5892206b7eabe4d7373c549ccaf8a4d1710dcbf5abb30d0b50af62411d6f1bae3ba69f1b8de8fbeb6f7eeeb99c  0019-ASoC-codecs-wcd937x-make-the-RX-HPH-Mode-names-match-the-values.patch
 "

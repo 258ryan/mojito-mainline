@@ -1,0 +1,20 @@
+From: postmarketOS mojito port
+Subject: [PATCH] ASoC: codecs: wcd937x: make the RX HPH Mode names match the values
+
+The control writes the item number into hph_mode, an enum wcd_clsh_mode. The
+name table had an extra "CLS_H_INVALID" entry and swapped the last two names, so
+for example "CLS_AB" selected CLS_H_LOHIFI. List the names in enum order.
+---
+--- a/sound/soc/codecs/wcd937x.c	2026-11-27 07:57:55.517255924 +0500
++++ b/sound/soc/codecs/wcd937x.c	2026-11-27 07:57:55.535149090 +0500
+@@ -1369,8 +1369,8 @@
+ }
+ 
+ static const char * const rx_hph_mode_mux_text[] = {
+-	"CLS_H_NORMAL", "CLS_H_INVALID", "CLS_H_HIFI", "CLS_H_LP", "CLS_AB",
+-	"CLS_H_LOHIFI", "CLS_H_ULP", "CLS_AB_LP", "CLS_AB_HIFI",
++	"CLS_H_NORMAL", "CLS_H_HIFI", "CLS_H_LP", "CLS_AB", "CLS_H_LOHIFI",
++	"CLS_H_ULP", "CLS_AB_HIFI", "CLS_AB_LP",
+ };
+ 
+ static const struct soc_enum rx_hph_mode_mux_enum =
