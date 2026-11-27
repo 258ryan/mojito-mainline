@@ -16,7 +16,7 @@ diff -urN a/arch/arm64/boot/dts/qcom/Makefile b/arch/arm64/boot/dts/qcom/Makefil
  dtb-$(CONFIG_ARCH_QCOM)	+= sm6350-sony-xperia-lena-pdx213.dtb
 --- a/arch/arm64/boot/dts/qcom/sm6150-xiaomi-mojito.dts	1970-01-01 05:00:00.000000000 +0500
 +++ b/arch/arm64/boot/dts/qcom/sm6150-xiaomi-mojito.dts	2026-11-27 07:00:00.000000000 +0500
-@@ -0,0 +1,1782 @@
+@@ -0,0 +1,1785 @@
 +// SPDX-License-Identifier: BSD-3-Clause
 +/*
 + * Xiaomi Redmi Note 10 (mojito / sunny), SM6150 "Talos".
@@ -49,9 +49,12 @@ diff -urN a/arch/arm64/boot/dts/qcom/Makefile b/arch/arm64/boot/dts/qcom/Makefil
 +	compatible = "xiaomi,mojito", "qcom,sm6150";
 +	chassis-type = "handset";
 +
-+	/* Matched by the Xiaomi bootloader (same values as the stock SM6150 DTB). */
++	/*
++	 * Matched by the Xiaomi bootloader (ABL) against the DTB in a boot image: msm-id as in the stock
++	 * SM6150 DTB, board-id as in the stock IDP overlay. ABL refuses board-id <0 0>.
++	 */
 +	qcom,msm-id = <0x163 0x0>;
-+	qcom,board-id = <0 0>;
++	qcom,board-id = <0x22 0x0>;
 +
 +	aliases {
 +		serial0 = &uart0;

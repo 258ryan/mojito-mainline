@@ -30,9 +30,12 @@
 	compatible = "xiaomi,mojito", "qcom,sm6150";
 	chassis-type = "handset";
 
-	/* Matched by the Xiaomi bootloader (same values as the stock SM6150 DTB). */
+	/*
+	 * Matched by the Xiaomi bootloader (ABL) against the DTB in a boot image: msm-id as in the stock
+	 * SM6150 DTB, board-id as in the stock IDP overlay. ABL refuses board-id <0 0>.
+	 */
 	qcom,msm-id = <0x163 0x0>;
-	qcom,board-id = <0 0>;
+	qcom,board-id = <0x22 0x0>;
 
 	aliases {
 		serial0 = &uart0;

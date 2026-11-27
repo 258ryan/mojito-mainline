@@ -1,6 +1,6 @@
 # Handoff: postmarketOS on the Redmi Note 10 (mojito / sunny)
 
-State as of 2026-11-27, mainline Linux 7.4-rc4, kernel package `pkgrel=30` (slot B runs r29's kernel with r30's DTB). Read this file first.
+State as of 2026-11-27, mainline Linux 7.4-rc4, kernel package `pkgrel=31` (slot B runs r29's kernel with r30's DTB). Read this file first.
 Older detail (how each thing was found, dead ends, reverse engineering): [`docs/HANDOFF-history.md`](docs/HANDOFF-history.md).
 
 ## Status
@@ -101,9 +101,16 @@ protocol) -> systemd-boot 262.2 -> loader entry -> Linux via the EFI stub (`efi:
 Test files on the phone's `/boot` (added by hand, nothing else changed): `EFI/BOOT/BOOTAA64.EFI` (from the Alpine
 `systemd-boot` apk, not installed), `loader/loader.conf`, `loader/entries/mainline-test.conf`, `mainline-test/{Image,dtb}`.
 
-Next: the `mojito-device` package (mainline kernel package installed for real, deviceinfo with the DTB, `systemd-boot`
-installed so `boot-deploy` writes `BOOTAA64.EFI` and the loader entry), `/boot` reformatted to FAT32 (ESP; back up first),
-U-Boot packaged and flashed to `boot_b` (keep a kernel boot image for rollback), then remove the test files.
+Packaged (2026-11-27) in the private repo `258ryan/mojito-device` (local `~/.claude-work/mojito-device-repo`):
+`device-xiaomi-mojito` pkgver 2 (mainline deviceinfo: FAT32 boot, depends on `systemd-boot`, fallback header v2
+`boot.img`, `flash_kernel_on_update` off since `boot_b` holds U-Boot; services/UCM/overlays from `mainline/rootfs/`),
+`hexagonrpcd-mojito`, `u-boot-xiaomi-mojito` (builds `u-boot.img`). `tools/sync-to-pmaports.sh` copies them, the
+firmware package and this kernel package into pmaports. Kernel r31: DTS board-id `0x22` (ABL refuses `<0 0>`; no more
+patching when packing) and `CONFIG_EFI_ZBOOT` (`/boot/linux.efi` for systemd-boot, raw `Image` as `/boot/vmlinuz` for
+the fallback boot.img). Slot A (downstream 4.14 on the same rootfs) is retired by the user; its boot image is saved in
+`~/.claude-work/pmos-mojito/backups/pre-mainline-device-2026-11-27/`.
+Next: build them, install on the phone (replaces the downstream device/kernel/firmware packages), reformat `/boot` to
+FAT32, flash `u-boot.img` to `boot_b`, remove the hand-copied test files and the `/usr/local/bin` hexagonrpcd.
 
 ## Workarounds still in place (the user wants as few as possible; fix causes, record any new shortcut)
 
