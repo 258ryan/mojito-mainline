@@ -1,12 +1,13 @@
 # Handoff: postmarketOS on the Redmi Note 10 (mojito / sunny)
 
-State as of 2026-11-27, mainline Linux 7.4-rc4, kernel package `pkgrel=31` (slot B runs r29's kernel with r30's DTB). Read this file first.
+State as of 2026-11-27, mainline Linux 7.4-rc4, kernel package `pkgrel=31`, installed as a package and booted through U-Boot (`boot_b`) + systemd-boot. Read this file first.
 Older detail (how each thing was found, dead ends, reverse engineering): [`docs/HANDOFF-history.md`](docs/HANDOFF-history.md).
 
 ## Status
 
 | Area | State |
 |---|---|
+| Boot chain: Xiaomi ABL -> U-Boot (`boot_b`) -> systemd-boot -> kernel from `/boot`; packaged (device package) | works (2026-11-27) |
 | Boot, display (DPU/DSI/panel), brightness with smooth dimming, touch, GPU, Phosh | works |
 | Wi-Fi (~18 s after boot), Bluetooth (~19 s) | works |
 | Mobile data (LTE) | works; calls not set up |
@@ -49,7 +50,9 @@ Item 3 VERIFIED (one run): 20 s s2idle with RTC wake: screen back, ADSP and mode
    until a replug). Stock leaves `0x1366 = 0x03` on an SDP; the driver writes `0x02`.
 4. Modem appears to ModemManager only ~30 s after boot (OpenRC also lists `modemmanager` as failed although it runs).
 5. One boot hung at udev "Waiting for uevents" (cause unknown).
-6. Calls (q6voiced and surya's q6voice patches), mic noise (retest in a quiet room; speaker amps ruled out), second mic
+6. Small: the DTS comment above `&gpu` still says the GPU firmware comes through downstream `/lib/firmware/qcom` symlinks;
+   it now comes from `firmware-xiaomi-mojito-mainline` via the `/lib/firmware/postmarketos` search path. Fix with the next kernel change.
+7. Calls (q6voiced and surya's q6voice patches), mic noise (retest in a quiet room; speaker amps ruled out), second mic
    (needs `qcom,tx-channel-mapping` and probably driver work), speaker amps stay powered while idle.
 
 ## CPU speed and throttling (done in pkgrel=30, DTS only)
@@ -64,7 +67,7 @@ cpu-1-2/3 cpu7). Stock's kernel trips are at 110 C but Android's thermal-engine 
 86 C at the end of the run. Sustained 2.5 min all-core load: big cluster steps down 2208 -> 2112 (once 2016) MHz and holds
 88-91 C; the little cluster stays at 1708.8 MHz. Not done: skin/battery temperature limits (only the SoC sensors are used).
 
-## U-Boot (IN PROGRESS, next task)
+## U-Boot (DONE 2026-11-27: flashed to `boot_b`, boots the packaged kernel)
 
 Goal: the Xiaomi ABL chainloads generic upstream U-Boot (`qcom_defconfig` + `qcom-phone.config`, no mojito code) from
 `boot_b`; U-Boot boots the kernel from `/boot` the standard way, so kernel/DTB updates stop needing hand-packed boot images.
@@ -109,14 +112,25 @@ firmware package and this kernel package into pmaports. Kernel r31: DTS board-id
 patching when packing) and `CONFIG_EFI_ZBOOT` (`/boot/linux.efi` for systemd-boot, raw `Image` as `/boot/vmlinuz` for
 the fallback boot.img). Slot A (downstream 4.14 on the same rootfs) is retired by the user; its boot image is saved in
 `~/.claude-work/pmos-mojito/backups/pre-mainline-device-2026-11-27/`.
-Next: build them, install on the phone (replaces the downstream device/kernel/firmware packages), reformat `/boot` to
-FAT32, flash `u-boot.img` to `boot_b`, remove the hand-copied test files and the `/usr/local/bin` hexagonrpcd.
+Installed and flashed 2026-11-27: the packages replaced the downstream device/kernel/firmware packages, `/boot` was
+reformatted to FAT32 (label `pmOS_boot`, fstab by UUID, `vfat ... umask=0077`), boot-deploy wrote `linux.efi`,
+`initramfs`, the DTB, systemd-boot (`EFI/BOOT/BOOTAA64.EFI`), `loader/entries/pmos.conf` and a fallback `boot.img`;
+`u-boot.img` from the package is on `boot_b`. Verified: `efi: EFI v2.11 by Das U-Boot`, r31 kernel, Phosh, Wi-Fi, sshd,
+sensors service, accelerometer mount matrix, sound card, GPU firmware (from `firmware-xiaomi-mojito-mainline` through
+the `/lib/firmware/postmarketos` search path). Kernel updates are now just `apk upgrade` + reboot (boot-deploy updates
+`/boot`; nothing to flash). The test files, `/usr/local/bin/hexagonrpcd-mojito`, `/etc/modprobe.d/ath10k-mojito.conf`
+and the hand-copied modules are gone.
+
+Rescue: `build.sh <src> <out> ums` makes a U-Boot that exports `userdata` (= the pmOS disk image) to the PC as USB mass
+storage at power-on; `fastboot boot` it and the PC sees `pmOS_boot` + `pmOS_root` (fsck, mount, fix, unmount). A volume
+key press ends it and U-Boot boots on. `ums 0 blkmap 0` does not work (the phone resets to fastboot). Pack it with the DTB
+from the packaged `u-boot.img`: ABL silently refused images packed with the r29t (r30) DTB file, and after a refused
+`fastboot boot` the next one fails until fastboot is re-entered with Power + Volume-down.
 
 ## Workarounds still in place (the user wants as few as possible; fix causes, record any new shortcut)
 
 | Workaround | Proper fix |
 |---|---|
-| No device package; files and packages installed by hand; initramfs borrowed from the downstream port | a mainline device package (agreed: private repo `mojito-device`, not created yet) |
 | `clk_ignore_unused` on the command line | claim the running clocks (audit: display PLLs/`disp_cc`, `ipa`, LPASS ids, rf/bb clocks, UFS/USB refs) |
 | Wi-Fi and Bluetooth loaded by script, modules blacklisted | proper ordering in the drivers/services |
 | "No DSP request for 3 s" means the sensor PD is served | a real ready notification |
@@ -125,37 +139,36 @@ FAT32, flash `u-boot.img` to `boot_b`, remove the hand-copied test files and the
 | SMMU identity domain (0006), stopping the bootloader timing engine (0007) | upstreamable fixes |
 | hexagonrpcd patch not upstream | send it |
 
-Already removed: `pd_ignore_unused`, discarded sensor-registry writes, log-line readiness guessing, numeric `RX HPH Mode`,
+Already removed: hand-installed files and the borrowed downstream initramfs (device package `mojito-device`), `pd_ignore_unused`, discarded sensor-registry writes, log-line readiness guessing, numeric `RX HPH Mode`,
 hand-added `audio video input` user groups (same mechanism), greeter PulseAudio `autospawn = no` (not needed: the greeter's PulseAudio exits at login and elogind's uaccess ACLs hand
 `/dev/snd` to the user session; verified with a test sound 2026-11-27).
 
-## The phone (slot B; slot A / stock kept apart)
+## The phone (slot B; slot A retired)
 
-- Boot image: header v2 (`mainline/mk-bootimg-v2.sh`), `dtbo_b` erased. `qbootctl` marks each boot successful.
+- `boot_b`: U-Boot (`u-boot-xiaomi-mojito`); `dtbo_b` erased. `qbootctl` marks each boot successful. Slot A (downstream)
+  is retired; its kernel package is gone.
+- Packages: `device-xiaomi-mojito` (mainline, private repo `mojito-device`), `linux-postmarketos-qcom-sm6150`,
+  `firmware-xiaomi-mojito-mainline` (repo `258ryan/mojito-firmware`; EFS images are in no repo), `hexagonrpcd-mojito`
+  (state in `/var/lib/hexagonrpcd/mojito`), `u-boot-xiaomi-mojito`. Still added by hand: `bootmac i2c-tools libgpiod
+  bluez-btmgmt wlr-randr postmarketos-ui-phosh gmobile swclock-offset`, modem userspace (`tools/install-modem-userspace.sh`).
 - Rootfs grown by hand to the full userdata partition (a clean install does not do this yet).
-- Packages added by hand: `bootmac hexagonrpcd i2c-tools libgpiod bluez-btmgmt wlr-randr postmarketos-ui-phosh gmobile
-  qbootctl qbootctl-openrc swclock-offset swclock-offset-openrc`, modem userspace (`tools/install-modem-userspace.sh`).
-- Firmware: private package `firmware-xiaomi-mojito-mainline` (repo `258ryan/mojito-firmware`); EFS images are in no repo.
-- `mainline/rootfs/` copied by hand: services `mojito-wifi` and `mojito-sensors` (default runlevel), `modprobe.d`
-  blacklist, UCM files, gmobile panel overlay + profile script, glib wallpaper override (then `glib-compile-schemas`),
-  The accelerometer udev rule is **not** active on the phone (it is in the device package).
-- `mainline/hexagonrpc/` build installed as `/usr/local/bin/hexagonrpcd-mojito`; state in `/var/lib/hexagonrpcd/mojito`.
-- User `user` has the pmOS default groups only (`audio video input` removed 2026-11-27: elogind's uaccess ACLs give the
-  active session sound, display and input; verified Phosh, touch and a test sound). PulseAudio (not PipeWire) drives the card.
+- SSH is OpenSSH (`sshd` in the default runlevel). The downstream port used dropbear from
+  `postmarketos-base-downstream-dropbear`; removing the downstream packages removed it, so `sshd` was enabled by hand.
+- User `user` has the pmOS default groups only (elogind's uaccess ACLs give the active session sound, display and input).
+  PulseAudio (not PipeWire) drives the card.
 
 ## Workflow
 
-The user runs the kernel build; the agent flashes and diagnoses. Ask for the SSH password each session; never store it.
+The agent may run `pmbootstrap build` with the user's sudo password (askpass from the session; never stored). Ask for the
+phone SSH password each session; never store it.
 
 1. DTS change: `python3 tools/regen-dts-patch.py`; DTS-only test without a build: `mainline/build-dtb.sh <linux-tree> out.dtb`.
-2. Kernel change: add or edit patches, bump `pkgrel`, update `sha512sums`, then `rsync -a
-   mainline/linux-postmarketos-qcom-sm6150/ <pmaports>/device/testing/linux-postmarketos-qcom-sm6150/`.
-3. `pmbootstrap build linux-postmarketos-qcom-sm6150` (~3 min for `.c`-only changes, ~13 min after config/header changes).
-4. Unpack the apk (`tar -xzf`). Keep the current boot image as rollback. Get ramdisk and cmdline from it with
-   `tools/unpack-boot-v2.py`, then `mk-bootimg-v2.sh Image dtb ramdisk out.img` (`PMOS_BOOT_UUID`, `PMOS_ROOT_UUID`,
-   `MKBOOTIMG` = android-tools' `mkbootimg.py`).
-5. `tools/install-modules.sh <unpacked apk> <phone ip>` (`SSH_ASKPASS`, `PHONE_PW`). Install matching UCM files too.
-6. `fastboot flash boot_b out.img && fastboot set_active b && fastboot reboot`; check `uname -v`.
+2. Kernel change: add or edit patches, bump `pkgrel`, update `sha512sums`; device/firmware/U-Boot changes go in the private
+   repos. `mojito-device/tools/sync-to-pmaports.sh` copies all packages into pmaports.
+3. `pmbootstrap build <pkg>` (~3 min for `.c`-only kernel changes, ~13 min after config/header changes).
+4. Copy the apks to the phone over Wi-Fi (`ssh ... 'cat > /var/tmp/x.apk' < x.apk`), `apk add --simulate` first and read
+   **all** of its output (the purges come first), then `apk add`. boot-deploy updates `/boot`; reboot; check `uname -v`.
+5. Rollback: the previous kernel apk; or boot the fallback `/boot/boot.img` with `fastboot boot`; or the UMS rescue U-Boot.
 
 Testing rules learned: give an audible or visible positive control before asking the user to judge a test (Phosh sound test for
 audio); keep tones quiet and short; make trial settings revert themselves; ask before reboots or sleep tests.
@@ -172,6 +185,9 @@ audio); keep tones quiet and short; make trial settings revert themselves; ask b
 - The clock starts in 1970 until swclock/NTP; meson and similar reject "future" timestamps (`tar -m`).
 - `pkill -f pattern` kills the calling shell if its command line contains the pattern.
 - `timeout N sh -c 'a | b'` kills only the shell; the pipeline keeps running (load tests: `pkill -x sha256sum` after).
+- 2026-11-27, kernel r29 (ABL boot): CPU1 stopped answering (RCU stall, no NMI response) ~2 min after reformatting
+  `/boot` and writing ~50 MB to it; writeback on `loop0` hung, `sync` and reboot hung, only a hard reset helped (data
+  survived). Not seen on r31 yet; watch for `rcu_preempt detected stalls`.
 
 ## Public repository
 
