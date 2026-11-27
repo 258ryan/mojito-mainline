@@ -29,6 +29,7 @@ depend() {
 start_pre() {
 	checkpath -d -m 0755 /run/hexagonrpcd
 	: > $LOG
+	rm -f /run/hexagonrpcd/ready
 	# The sensor PD must be attached AFTER the modem's WLAN firmware service (QMI 69) is registered:
 	# every run that started hexagonrpcd earlier got 119 for the rest of the boot.
 	for i in $(seq 1 120); do
@@ -47,8 +48,7 @@ start_post() {
 		[ "$n" -ge "${wifi_min_lines:-100}" ] && [ $quiet -ge "${wifi_quiet_polls:-6}" ] && break
 		sleep 0.5
 	  done
-	  # accelerometer, light and compass come from the same sensor PD: (re)start the proxy now it is served
-	  rc-service --ifexists iio-sensor-proxy restart >/dev/null 2>&1
+	  touch /run/hexagonrpcd/ready		# the sensor PD is served (mojito-sensors waits for this)
 	  lsmod | grep -q '^ath10k_snoc ' && exit 0
 	  before=$(dmesg | grep -c 'capability req rejected')
 	  logger -t mojito-wifi "sensor PD served ($n lines), loading ath10k_snoc"

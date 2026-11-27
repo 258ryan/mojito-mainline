@@ -12,7 +12,8 @@ State as of 2026-11-27 (Wi-Fi work 2026-11-26/27).
   and the modem then stalled ("DOG detects stalled initialization") until a clean reboot. One trial boot hung at udev "Waiting for
   uevents" (cause not found; Power+Vol-down recovered it).
 - `swclock-offset-boot`/`-shutdown` installed (the PMIC RTC is read-only; the clock started in 1970).
-- `mojito-wifi` now restarts `iio-sensor-proxy` once the sensor PD is served (it did not start by itself; this line is not yet boot-tested).
+- Sensors have their own service, `rootfs/etc/init.d/mojito-sensors` (default runlevel): `iio-sensor-proxy`'s udev rule only asks
+  systemd to start it. `mojito-wifi` touches `/run/hexagonrpcd/ready` when the sensor PD is served; `mojito-sensors` waits for that.
 - Open: the modem appears to ModemManager only ~30 s after boot (software starts at ~10 s).
 
 ### Volume-up and vibration work (2026-11-27, verified by hand; phone boot_b = r27 Image + `r27/boot_b-r27-keys.img` DTB)
