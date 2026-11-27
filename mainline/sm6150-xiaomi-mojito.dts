@@ -306,6 +306,13 @@
 		compatible = "qcom,pm6150l-rpmh-regulators";
 		qcom,pmic-id = "c";
 
+		/* WCD937x mic bias (stock: cdc-vdd-mic-bias-supply = pm6150l_bob) */
+		vreg_bob: bob {
+			regulator-min-microvolt = <3296000>;
+			regulator-max-microvolt = <3960000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_AUTO>;
+		};
+
 		vreg_s8c: smps8 {
 			regulator-min-microvolt = <1200000>;
 			regulator-max-microvolt = <1400000>;
@@ -529,6 +536,264 @@
 				#sound-dai-cells = <0>;
 			};
 		};
+	};
+};
+
+/*
+ * Audio: LPASS LPI pins + VA/TX/RX macros + SoundWire + WCD9375 (stock "bolero" layout).
+ * Sources: stock mojito DT (pins, IRQs, supplies, mic bias), the SM7150 ports that have the same LPASS
+ * block and codec (Xiaomi surya / Mi 9T fixes: LPI mux, reset pin as gpio, no dcodec vote, TX port map),
+ * and the violet notes (APR, not AudioReach). Untested on this phone (2026-11-27).
+ */
+&soc {
+	/* stock lpi_pinctrl: 0x62b40000 + 0x1000 per pin, gpio18..31 = these pins 0..13 */
+	lpass_tlmm: pinctrl@62b52000 {
+		compatible = "qcom,sm6150-lpass-lpi-pinctrl";
+		reg = <0x0 0x62b52000 0x0 0xe000>;
+		/* stock: lpass_core_hw_vote (audio-ref-clk src 9) = AFE LPASS core HW vote */
+		clocks = <&q6afecc LPASS_HW_MACRO_VOTE LPASS_CLK_ATTRIBUTE_COUPLE_NO>;
+		clock-names = "core";
+		gpio-controller;
+		#gpio-cells = <2>;
+		gpio-ranges = <&lpass_tlmm 0 0 14>;
+
+		tx_swr_active: tx-swr-active-state {
+			clk-pins {
+				pins = "gpio0";
+				function = "swr_tx_clk";
+				drive-strength = <8>;
+				bias-bus-hold;
+			};
+
+			data-pins {
+				pins = "gpio1", "gpio2";
+				function = "swr_tx_data";
+				drive-strength = <8>;
+				bias-bus-hold;
+			};
+		};
+
+		rx_swr_active: rx-swr-active-state {
+			clk-pins {
+				pins = "gpio3";
+				function = "swr_rx_clk";
+				drive-strength = <8>;
+				bias-bus-hold;
+			};
+
+			data-pins {
+				pins = "gpio4", "gpio5";
+				function = "swr_rx_data";
+				drive-strength = <8>;
+				bias-bus-hold;
+			};
+		};
+
+		/* stock msm_cdc_pinctrl@24 (qcom,lpi-gpios): WCD937x reset; plain gpio, level owned by the driver */
+		wcd_reset_default: wcd-reset-default-state {
+			pins = "gpio6";
+			function = "gpio";
+			drive-strength = <16>;
+			bias-disable;
+		};
+	};
+
+	/* fsgen master for TX/RX; shares the TX core mclk; only the "macro" vote (no dcodec in this firmware) */
+	lpass_va_macro: codec@62f20000 {
+		compatible = "qcom,sm8250-lpass-va-macro";
+		reg = <0x0 0x62f20000 0x0 0x1000>;
+		clocks = <&q6afecc LPASS_CLK_ID_TX_CORE_MCLK LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
+			 <&q6afecc LPASS_HW_MACRO_VOTE LPASS_CLK_ATTRIBUTE_COUPLE_NO>;
+		clock-names = "mclk", "macro";
+		#clock-cells = <0>;
+		clock-output-names = "fsgen";
+		#sound-dai-cells = <1>;
+	};
+
+	lpass_tx_macro: codec@62ec0000 {
+		compatible = "qcom,sm8250-lpass-tx-macro";
+		reg = <0x0 0x62ec0000 0x0 0x1000>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&tx_swr_active>;
+		clocks = <&q6afecc LPASS_CLK_ID_TX_CORE_MCLK LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
+			 <&q6afecc LPASS_CLK_ID_TX_CORE_NPL_MCLK LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
+			 <&q6afecc LPASS_HW_MACRO_VOTE LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
+			 <&lpass_va_macro>;
+		clock-names = "mclk", "npl", "macro", "fsgen";
+		#clock-cells = <0>;
+		clock-output-names = "lpass-tx-mclk";
+		#sound-dai-cells = <1>;
+	};
+
+	/* stock tx_swr_master: swrm-io-base 0x62ed0000, SPI 137 + wake SPI 623 (= PDC pin 108) */
+	swr_tx: soundwire@62ed0000 {
+		compatible = "qcom,soundwire-v1.5.1";
+		reg = <0x0 0x62ed0000 0x0 0x2000>;
+		interrupts-extended = <&intc GIC_SPI 137 IRQ_TYPE_LEVEL_HIGH 0>,
+				      <&pdc 108 IRQ_TYPE_LEVEL_HIGH>;
+		interrupt-names = "core", "wakeup";
+		clocks = <&lpass_tx_macro>;
+		clock-names = "iface";
+		label = "TX";
+
+		qcom,din-ports = <5>;
+		qcom,dout-ports = <0>;
+		qcom,ports-sinterval-low =	/bits/ 8 <0xff 0x01 0x01 0x03 0x03>;
+		qcom,ports-offset1 =		/bits/ 8 <0xff 0x01 0x00 0x02 0x00>;
+		qcom,ports-offset2 =		/bits/ 8 <0xff 0x00 0x00 0x00 0x00>;
+		qcom,ports-block-pack-mode =	/bits/ 8 <0xff 0xff 0xff 0xff 0xff>;
+		qcom,ports-hstart =		/bits/ 8 <0xff 0xff 0xff 0xff 0xff>;
+		qcom,ports-hstop =		/bits/ 8 <0xff 0xff 0xff 0xff 0xff>;
+		qcom,ports-word-length =	/bits/ 8 <0xff 0xff 0xff 0xff 0xff>;
+		qcom,ports-block-group-count =	/bits/ 8 <0xff 0xff 0xff 0xff 0xff>;
+		qcom,ports-lane-control =	/bits/ 8 <0xff 0x00 0x01 0x00 0x01>;
+
+		#sound-dai-cells = <1>;
+		#address-cells = <2>;
+		#size-cells = <0>;
+
+		wcd_tx: codec@0,3 {
+			compatible = "sdw20217010a00";
+			reg = <0 3>;
+			/* WCD937x TX ports ADC1, ADC2/3, DMIC0-3+MBHC, DMIC4-7 -> SWR ports 2, 2, 3, 4 (port 1 = PCM_OUT1) */
+			qcom,tx-port-mapping = <2 2 3 4>;
+		};
+	};
+
+	lpass_rx_macro: codec@62ee0000 {
+		compatible = "qcom,sm8250-lpass-rx-macro";
+		reg = <0x0 0x62ee0000 0x0 0x1000>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&rx_swr_active>;
+		clocks = <&q6afecc LPASS_CLK_ID_RX_CORE_MCLK LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
+			 <&q6afecc LPASS_CLK_ID_RX_CORE_NPL_MCLK LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
+			 <&q6afecc LPASS_HW_MACRO_VOTE LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
+			 <&lpass_va_macro>;
+		clock-names = "mclk", "npl", "macro", "fsgen";
+		#clock-cells = <0>;
+		clock-output-names = "lpass-rx-mclk";
+		#sound-dai-cells = <1>;
+	};
+
+	/* stock rx_swr_master: 0x62ef0000, SPI 138 */
+	swr_rx: soundwire@62ef0000 {
+		compatible = "qcom,soundwire-v1.5.1";
+		reg = <0x0 0x62ef0000 0x0 0x2000>;
+		interrupts = <GIC_SPI 138 IRQ_TYPE_LEVEL_HIGH 0>;
+		clocks = <&lpass_rx_macro>;
+		clock-names = "iface";
+		label = "RX";
+
+		qcom,din-ports = <0>;
+		qcom,dout-ports = <5>;
+		qcom,ports-sinterval-low =	/bits/ 8 <0x03 0x1f 0x1f 0x07 0x00>;
+		qcom,ports-offset1 =		/bits/ 8 <0x00 0x00 0x0b 0x01 0x00>;
+		qcom,ports-offset2 =		/bits/ 8 <0x00 0x00 0x0b 0x00 0x00>;
+		qcom,ports-hstart =		/bits/ 8 <0xff 0x03 0xff 0xff 0xff>;
+		qcom,ports-hstop =		/bits/ 8 <0xff 0x06 0xff 0xff 0xff>;
+		qcom,ports-word-length =	/bits/ 8 <0x01 0x07 0x04 0xff 0xff>;
+		qcom,ports-block-pack-mode =	/bits/ 8 <0xff 0x00 0x01 0xff 0xff>;
+		qcom,ports-lane-control =	/bits/ 8 <0x01 0x00 0x00 0x00 0x00>;
+		qcom,ports-block-group-count =	/bits/ 8 <0xff 0xff 0xff 0xff 0x00>;
+
+		#sound-dai-cells = <1>;
+		#address-cells = <2>;
+		#size-cells = <0>;
+
+		wcd_rx: codec@0,4 {
+			compatible = "sdw20217010a00";
+			reg = <0 4>;
+			qcom,rx-port-mapping = <1 2 3 4 5>;
+		};
+	};
+
+
+};
+
+/ {
+	sound {
+		compatible = "qcom,sm8250-sndcard";
+		model = "Xiaomi Redmi Note 10";
+
+		/* stock mics: amic1 = ADC1 (main), amic2/amic3 = ADC2 via ADC2 MUX INP2/INP3 */
+		audio-routing =
+			"AMIC1", "MIC BIAS1",
+			"AMIC2", "MIC BIAS2",
+			"AMIC3", "MIC BIAS3",
+			"TX SWR_ADC0", "ADC1_OUTPUT",
+			"TX SWR_ADC1", "ADC2_OUTPUT",
+			"TX SWR_ADC2", "ADC3_OUTPUT";
+
+		mm1-dai-link {
+			link-name = "MultiMedia1";
+
+			cpu {
+				sound-dai = <&q6asmdai MSM_FRONTEND_DAI_MULTIMEDIA1>;
+			};
+		};
+
+		mm2-dai-link {
+			link-name = "MultiMedia2";
+
+			cpu {
+				sound-dai = <&q6asmdai MSM_FRONTEND_DAI_MULTIMEDIA2>;
+			};
+		};
+
+		/* headphones (and earpiece/speaker later, via WCD937x EAR/AUX + the AW87xxx amps) */
+		wcd-playback-dai-link {
+			link-name = "WCD Playback";
+
+			cpu {
+				sound-dai = <&q6afedai RX_CODEC_DMA_RX_0>;
+			};
+
+			platform {
+				sound-dai = <&q6routing>;
+			};
+
+			codec {
+				sound-dai = <&wcd9375 0>, <&swr_rx 0>, <&lpass_rx_macro 0>;
+			};
+		};
+
+		wcd-capture-dai-link {
+			link-name = "WCD Capture";
+
+			cpu {
+				sound-dai = <&q6afedai TX_CODEC_DMA_TX_3>;
+			};
+
+			platform {
+				sound-dai = <&q6routing>;
+			};
+
+			codec {
+				sound-dai = <&wcd9375 1>, <&swr_tx 0>, <&lpass_tx_macro 0>;
+			};
+		};
+	};
+	wcd9375: audio-codec {
+		compatible = "qcom,wcd9375-codec";
+		pinctrl-names = "default";
+		pinctrl-0 = <&wcd_reset_default>;
+		reset-gpios = <&lpass_tlmm 6 GPIO_ACTIVE_LOW>;
+
+		/* stock: buck = pm6150_l15, rxtx/px = pm6150_l10, mic bias = pm6150l_bob, micbias 2.7 V */
+		vdd-buck-supply = <&vreg_l15a>;
+		vdd-rxtx-supply = <&vreg_l10a>;
+		vdd-px-supply = <&vreg_l10a>;
+		vdd-mic-bias-supply = <&vreg_bob>;
+
+		qcom,micbias1-microvolt = <2700000>;
+		qcom,micbias2-microvolt = <2700000>;
+		qcom,micbias3-microvolt = <2700000>;
+		qcom,micbias4-microvolt = <2700000>;
+
+		qcom,rx-device = <&wcd_rx>;
+		qcom,tx-device = <&wcd_tx>;
+
+		#sound-dai-cells = <1>;
 	};
 };
 

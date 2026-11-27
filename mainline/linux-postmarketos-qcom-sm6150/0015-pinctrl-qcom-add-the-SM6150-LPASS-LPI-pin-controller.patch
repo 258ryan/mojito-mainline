@@ -1,0 +1,219 @@
+From: postmarketOS mojito port
+Subject: [PATCH] pinctrl: qcom: add the SM6150 LPASS LPI pin controller; wcd937x: sleeping reset GPIO
+
+SM6150 has the SM7150 LPASS LPI block (0x62b52000, vendor gpio18-31). Pin table from the
+SM7150 driver with the gpio19 (swr_tx_data, func3) and gpio23 (swr_rx_data, func2) mux fixes
+that the stock mojito DT confirms. Without these, TX never enumerates and RX clashes
+(MASTER_CLASH_DET), as on the violet port. Also use gpiod_set_value_cansleep() for the WCD937x
+reset, which sits behind this sleeping LPI GPIO controller (from the surya port).
+---
+diff -urN a/drivers/pinctrl/qcom/Kconfig b/drivers/pinctrl/qcom/Kconfig
+--- a/drivers/pinctrl/qcom/Kconfig	2026-11-27 05:20:07.326682268 +0500
++++ b/drivers/pinctrl/qcom/Kconfig	2026-11-27 05:20:25.828318216 +0500
+@@ -130,6 +130,15 @@
+ 	  Qualcomm Technologies Inc LPASS (Low Power Audio SubSystem) LPI
+ 	  (Low Power Island) found on the Qualcomm Technologies Inc SM6115 platform.
+ 
++config PINCTRL_SM6150_LPASS_LPI
++	tristate "Qualcomm SM6150 LPASS LPI pin controller driver"
++	depends on ARM64 || COMPILE_TEST
++	depends on PINCTRL_LPASS_LPI
++	help
++	  This is the pinctrl, pinmux, pinconf and gpiolib driver for the
++	  Qualcomm Technologies Inc LPASS (Low Power Audio SubSystem) LPI
++	  (Low Power Island) found on the Qualcomm Technologies Inc SM6150 platform.
++
+ config PINCTRL_SM6350_LPASS_LPI
+ 	tristate "Qualcomm SM6350 LPASS LPI pin controller driver"
+ 	depends on ARM64 || COMPILE_TEST
+diff -urN a/drivers/pinctrl/qcom/Makefile b/drivers/pinctrl/qcom/Makefile
+--- a/drivers/pinctrl/qcom/Makefile	2026-11-27 05:20:07.326767890 +0500
++++ b/drivers/pinctrl/qcom/Makefile	2026-11-27 05:20:25.828450667 +0500
+@@ -69,6 +69,7 @@
+ obj-$(CONFIG_PINCTRL_SM6115) += pinctrl-sm6115.o
+ obj-$(CONFIG_PINCTRL_SM6115_LPASS_LPI) += pinctrl-sm6115-lpass-lpi.o
+ obj-$(CONFIG_PINCTRL_SM6125) += pinctrl-sm6125.o
++obj-$(CONFIG_PINCTRL_SM6150_LPASS_LPI) += pinctrl-sm6150-lpass-lpi.o
+ obj-$(CONFIG_PINCTRL_SM6350) += pinctrl-sm6350.o
+ obj-$(CONFIG_PINCTRL_SM6350_LPASS_LPI) += pinctrl-sm6350-lpass-lpi.o
+ obj-$(CONFIG_PINCTRL_SM6375) += pinctrl-sm6375.o
+diff -urN a/drivers/pinctrl/qcom/pinctrl-sm6150-lpass-lpi.c b/drivers/pinctrl/qcom/pinctrl-sm6150-lpass-lpi.c
+--- a/drivers/pinctrl/qcom/pinctrl-sm6150-lpass-lpi.c	1970-01-01 05:00:00.000000000 +0500
++++ b/drivers/pinctrl/qcom/pinctrl-sm6150-lpass-lpi.c	2026-11-27 05:20:25.828210300 +0500
+@@ -0,0 +1,160 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Copyright (c) 2024, Danila Tikhonov <danila@jiaxyga.com>
++ *
++ * SM6150 (Talos) uses the same LPASS LPI block as SM6150 (at 0x62b52000, the
++ * vendor tree's gpio18-31). Pin table from the SM6150 driver with the two
++ * mux fixes the vendor DT confirms for this block (gpio19/pin 1: swr_tx_data
++ * on func3; gpio23/pin 5: swr_rx_data on func2), as found by Artem Hutsaliuk
++ * for the Xiaomi Mi 9T (WCD9375).
++ */
++
++#include <linux/gpio/driver.h>
++#include <linux/module.h>
++#include <linux/platform_device.h>
++
++#include "pinctrl-lpass-lpi.h"
++
++enum lpass_lpi_functions {
++	LPI_MUX_audio_ref,
++	LPI_MUX_cdc_pdm_rx,
++	LPI_MUX_dmic1_clk,
++	LPI_MUX_dmic1_data,
++	LPI_MUX_dmic2_clk,
++	LPI_MUX_dmic2_data,
++	LPI_MUX_qdss_cti,
++	LPI_MUX_gp_pdm,
++	LPI_MUX_prim_mclk_a,
++	LPI_MUX_prim_mclk_b,
++	LPI_MUX_qca_sb_clk,
++	LPI_MUX_qca_sb_data,
++	LPI_MUX_qua_mi2s_data,
++	LPI_MUX_qua_mi2s_sclk,
++	LPI_MUX_qua_mi2s_ws,
++	LPI_MUX_slimbus_clk,
++	LPI_MUX_slimbus_data,
++	LPI_MUX_swr_rx_clk,
++	LPI_MUX_swr_rx_data,
++	LPI_MUX_swr_tx_clk,
++	LPI_MUX_swr_tx_data,
++	LPI_MUX_gpio,
++	LPI_MUX__,
++};
++
++static const struct pinctrl_pin_desc sm6150_lpi_pins[] = {
++	PINCTRL_PIN(0, "gpio0"),
++	PINCTRL_PIN(1, "gpio1"),
++	PINCTRL_PIN(2, "gpio2"),
++	PINCTRL_PIN(3, "gpio3"),
++	PINCTRL_PIN(4, "gpio4"),
++	PINCTRL_PIN(5, "gpio5"),
++	PINCTRL_PIN(6, "gpio6"),
++	PINCTRL_PIN(7, "gpio7"),
++	PINCTRL_PIN(8, "gpio8"),
++	PINCTRL_PIN(9, "gpio9"),
++	PINCTRL_PIN(10, "gpio10"),
++	PINCTRL_PIN(11, "gpio11"),
++	PINCTRL_PIN(12, "gpio12"),
++	PINCTRL_PIN(13, "gpio13"),
++};
++
++static const char * const gpio_groups[] = {
++	"gpio0",  "gpio1",  "gpio2",  "gpio3",  "gpio4",  "gpio5",  "gpio6",
++	"gpio7",  "gpio8",  "gpio9",  "gpio10", "gpio11", "gpio12", "gpio13",
++};
++
++static const char * const audio_ref_groups[] = { "gpio1" };
++static const char * const cdc_pdm_rx_groups[] = { "gpio6" };
++static const char * const dmic1_clk_groups[] = { "gpio8" };
++static const char * const dmic1_data_groups[] = { "gpio9" };
++static const char * const dmic2_clk_groups[] = { "gpio10" };
++static const char * const dmic2_data_groups[] = { "gpio11" };
++static const char * const qdss_cti_groups[] = { "gpio9", "gpio10" };
++static const char * const gp_pdm_groups[] = { "gpio10" };
++static const char * const prim_mclk_a_groups[] = { "gpio4" };
++static const char * const prim_mclk_b_groups[] = { "gpio11" };
++static const char * const qca_sb_clk_groups[] = { "gpio13" };
++static const char * const qca_sb_data_groups[] = { "gpio12" };
++static const char * const qua_mi2s_data_groups[] = { "gpio7", "gpio8", "gpio9", "gpio10" };
++static const char * const qua_mi2s_sclk_groups[] = { "gpio5" };
++static const char * const qua_mi2s_ws_groups[] = { "gpio6" };
++static const char * const slimbus_clk_groups[] = { "gpio0" };
++static const char * const slimbus_data_groups[] = { "gpio2", "gpio3", "gpio4" };
++static const char * const swr_rx_clk_groups[] = { "gpio3" };
++static const char * const swr_rx_data_groups[] = { "gpio4", "gpio5" };
++static const char * const swr_tx_clk_groups[] = { "gpio0" };
++static const char * const swr_tx_data_groups[] = { "gpio1", "gpio2", "gpio5" };
++
++static const struct lpi_pingroup sm6150_groups[] = {
++	LPI_PINGROUP(0, 0, slimbus_clk, swr_tx_clk, _, _),
++	LPI_PINGROUP(1, 2, _, audio_ref, swr_tx_data, _),
++	LPI_PINGROUP(2, 4, slimbus_data, swr_tx_data, _, _),
++	LPI_PINGROUP(3, 8, slimbus_data, swr_rx_clk, _, _),
++	LPI_PINGROUP(4, 10, slimbus_data, swr_rx_data, prim_mclk_a, _),
++	LPI_PINGROUP(5, 6, qua_mi2s_sclk, swr_rx_data, _, swr_tx_data),
++	LPI_PINGROUP(6, LPI_NO_SLEW, qua_mi2s_ws, cdc_pdm_rx, _, _),
++	LPI_PINGROUP(7, LPI_NO_SLEW, qua_mi2s_data, _, _, _),
++	LPI_PINGROUP(8, LPI_NO_SLEW, qua_mi2s_data, dmic1_clk, _, _),
++	LPI_PINGROUP(9, LPI_NO_SLEW, qua_mi2s_data, dmic1_data, qdss_cti, _),
++	LPI_PINGROUP(10, LPI_NO_SLEW, qua_mi2s_data, dmic2_clk, gp_pdm, qdss_cti),
++	LPI_PINGROUP(11, LPI_NO_SLEW, prim_mclk_b, dmic2_data, _, _),
++	LPI_PINGROUP(12, LPI_NO_SLEW, qca_sb_data, _, _, _),
++	LPI_PINGROUP(13, LPI_NO_SLEW, qca_sb_clk, _, _, _),
++};
++
++static const struct lpi_function sm6150_functions[] = {
++	LPI_FUNCTION(audio_ref),
++	LPI_FUNCTION(cdc_pdm_rx),
++	LPI_FUNCTION(dmic1_clk),
++	LPI_FUNCTION(dmic1_data),
++	LPI_FUNCTION(dmic2_clk),
++	LPI_FUNCTION(dmic2_data),
++	LPI_FUNCTION(qdss_cti),
++	LPI_FUNCTION(gp_pdm),
++	LPI_FUNCTION(prim_mclk_a),
++	LPI_FUNCTION(prim_mclk_b),
++	LPI_FUNCTION(qca_sb_clk),
++	LPI_FUNCTION(qca_sb_data),
++	LPI_FUNCTION(qua_mi2s_data),
++	LPI_FUNCTION(qua_mi2s_sclk),
++	LPI_FUNCTION(qua_mi2s_ws),
++	LPI_FUNCTION(slimbus_clk),
++	LPI_FUNCTION(slimbus_data),
++	LPI_FUNCTION(swr_rx_clk),
++	LPI_FUNCTION(swr_rx_data),
++	LPI_FUNCTION(swr_tx_clk),
++	LPI_FUNCTION(swr_tx_data),
++	LPI_FUNCTION(gpio),
++};
++
++static const struct lpi_pinctrl_variant_data sm6150_lpi_data = {
++	.pins = sm6150_lpi_pins,
++	.npins = ARRAY_SIZE(sm6150_lpi_pins),
++	.groups = sm6150_groups,
++	.ngroups = ARRAY_SIZE(sm6150_groups),
++	.functions = sm6150_functions,
++	.nfunctions = ARRAY_SIZE(sm6150_functions),
++	.flags = LPI_FLAG_SLEW_RATE_SAME_REG,
++};
++
++static const struct of_device_id lpi_pinctrl_of_match[] = {
++	{
++	       .compatible = "qcom,sm6150-lpass-lpi-pinctrl",
++	       .data = &sm6150_lpi_data,
++	},
++	{ }
++};
++MODULE_DEVICE_TABLE(of, lpi_pinctrl_of_match);
++
++static struct platform_driver lpi_pinctrl_driver = {
++	.driver = {
++		   .name = "qcom-sm6150-lpass-lpi-pinctrl",
++		   .of_match_table = lpi_pinctrl_of_match,
++	},
++	.probe = lpi_pinctrl_probe,
++	.remove = lpi_pinctrl_remove,
++};
++
++module_platform_driver(lpi_pinctrl_driver);
++MODULE_DESCRIPTION("Qualcomm SM6150 LPI GPIO pin control driver");
++MODULE_LICENSE("GPL");
+diff -urN a/sound/soc/codecs/wcd937x.c b/sound/soc/codecs/wcd937x.c
+--- a/sound/soc/codecs/wcd937x.c	2026-11-27 05:20:07.328037627 +0500
++++ b/sound/soc/codecs/wcd937x.c	2026-11-27 05:20:25.828838266 +0500
+@@ -240,9 +240,10 @@
+ 
+ static void wcd937x_reset(struct wcd937x_priv *wcd937x)
+ {
+-	gpiod_set_value(wcd937x->reset_gpio, 1);
++	/* the reset line may sit behind a sleeping controller (LPASS LPI pinctrl) */
++	gpiod_set_value_cansleep(wcd937x->reset_gpio, 1);
+ 	usleep_range(20, 30);
+-	gpiod_set_value(wcd937x->reset_gpio, 0);
++	gpiod_set_value_cansleep(wcd937x->reset_gpio, 0);
+ 	usleep_range(20, 30);
+ }
+ 

@@ -49,6 +49,14 @@ Lessons (each cost a freeze/boot):
 - Rotation: upright reported `bottom-up` without a mount matrix; `rootfs/usr/lib/udev/rules.d/81-libssc-xiaomi-mojito.rules`
   (Y,Z inverted) was written and tested once, then parked as `/root/81-libssc-xiaomi-mojito.rules.off` on the phone during the freeze
   hunt. It was not the cause: re-test and re-enable.
+- **Audio bring-up written, NOT tested yet (2026-11-27), in r25:** patch 0015 adds `pinctrl-sm6150-lpass-lpi` (the SM7150 LPI block:
+  0x62b52000 = stock gpio18-31; table with the gpio19 swr_tx_data=func3 and gpio23 swr_rx_data=func2 fixes from the surya/Mi 9T ports,
+  confirmed by the stock DT) and the wcd937x `gpiod_set_value_cansleep` reset fix. DTS: `vreg_bob`, `lpass_tlmm` (vote LPASS_HW_MACRO),
+  VA/TX/RX macros (no dcodec vote), SoundWire TX (SPI 137 + wake PDC 108) / RX (SPI 138), v1.5.1, surya port tables, TX map <2 2 3 4>,
+  WCD9375 (reset = LPI pin 6 as gpio, L15a/L10a/BOB, micbias 2.7 V per stock), sm8250 card: headphones + mics. Violet's failures
+  (UNATTACHED, MASTER_CLASH_DET) match the missing LPI mux, the wrong reset pin (it used TLMM 24) and the LPI mux bugs.
+  Speaker/earpiece still need the AW87xxx amps (i2c3 0x58 / 0x5b, no mainline driver; stock init sequences are in the private dump).
+  First boot: blacklist `pinctrl_sm6150_lpass_lpi` and load it by hand (the LPI/LPASS block can hang the SoC without its vote).
 - **"battery over-voltage" dmesg flood** (charger, patch 0008): not an interrupt (bat-ov IRQ count 0) but the health getter printing
   each time UPower polls, while BATTERY_CHARGER_STATUS_2 has BAT_OV set. That happens when the battery sits above our 4.45 V float,
   e.g. after Android charged it to its 4.47 V (`qcom,fv-max-uv`). The cell rating is 4.45 V (`qcom,max-voltage-uv`, both cell
