@@ -9,7 +9,7 @@ switch so UCM can pick the amplifiers. Tested by hand with i2c-tools first: spea
 diff -urN a/sound/soc/codecs/aw87xxx-seq.c b/sound/soc/codecs/aw87xxx-seq.c
 --- a/sound/soc/codecs/aw87xxx-seq.c	1970-01-01 05:00:00.000000000 +0500
 +++ b/sound/soc/codecs/aw87xxx-seq.c	2026-11-27 06:00:45.474899076 +0500
-@@ -0,0 +1,169 @@
+@@ -0,0 +1,187 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * Awinic AW87xxx class-K speaker amplifiers driven by a register sequence.
@@ -162,6 +162,23 @@ diff -urN a/sound/soc/codecs/aw87xxx-seq.c b/sound/soc/codecs/aw87xxx-seq.c
 +	return devm_snd_soc_register_component(dev, &aw87xxx_seq_component, NULL, 0);
 +}
 +
++/*
++ * Switch the amplifier off and hold it in reset before the rails go down, as the vendor
++ * driver does; an amplifier left enabled pops when the supplies collapse.
++ */
++static void aw87xxx_seq_shutdown(struct i2c_client *client)
++{
++	struct aw87xxx_seq *aw = i2c_get_clientdata(client);
++	static const u8 off_default[] = { 0x01, 0x00 };
++
++	if (aw->off_seq)
++		aw87xxx_seq_write(aw, aw->off_seq, aw->off_len);
++	else
++		aw87xxx_seq_write(aw, off_default, sizeof(off_default));
++	if (aw->reset)
++		gpiod_set_value_cansleep(aw->reset, 1);
++}
++
 +static const struct of_device_id aw87xxx_seq_of_match[] = {
 +	{ .compatible = "awinic,aw87xxx-seq" },
 +	{ }
@@ -174,6 +191,7 @@ diff -urN a/sound/soc/codecs/aw87xxx-seq.c b/sound/soc/codecs/aw87xxx-seq.c
 +		.of_match_table = aw87xxx_seq_of_match,
 +	},
 +	.probe = aw87xxx_seq_probe,
++	.shutdown = aw87xxx_seq_shutdown,
 +};
 +module_i2c_driver(aw87xxx_seq_driver);
 +

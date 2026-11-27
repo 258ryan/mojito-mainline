@@ -1,6 +1,6 @@
 # Handoff: postmarketOS on the Redmi Note 10 (mojito / sunny)
 
-State as of 2026-11-27, mainline Linux 7.4-rc4, kernel package `pkgrel=35`, installed as a package and booted through U-Boot (`boot_b`) + systemd-boot. Read this file first.
+State as of 2026-11-27, mainline Linux 7.4-rc4, kernel package `pkgrel=36`, installed as a package and booted through U-Boot (`boot_b`) + systemd-boot. Read this file first.
 Older detail (how each thing was found, dead ends, reverse engineering): [`docs/HANDOFF-history.md`](docs/HANDOFF-history.md).
 
 ## Status
@@ -50,7 +50,11 @@ Item 3 VERIFIED (one run): 20 s s2idle with RTC wake: screen back, ADSP and mode
    until a replug). Stock leaves `0x1366 = 0x03` on an SDP; the driver writes `0x02`.
 4. Modem appears to ModemManager only ~30 s after boot (OpenRC also lists `modemmanager` as failed although it runs).
 5. One boot hung at udev "Waiting for uevents" (cause unknown).
-6. Pops/crackles on the speakers (user report 2026-11-27): retest after the pkgrel=34 routing fix; see the Speakers section.
+6. Pops on the speakers (2026-11-27): one at shutdown, one when the lock screen loads, one when the home screen appears; none
+   from ordinary sounds or idle power cycles (tested with silent streams). Reproduced by `pulseaudio -k`: the UCM
+   DisableSequence switches the amp switches off while PulseAudio's stream is still running, so DAPM powers the whole speaker
+   path down mid-stream (trace: amps, EAR/AUX PGA, RDAC3/4, RX_MCLK within 20 ms). Idle power-down after the stream stops does
+   not pop. Fix options: UCM disable ordering, or the vendor's RX mute around the WCD937x PA power-down.
 7. Calls (q6voiced and surya's q6voice patches), mic noise (retest in a quiet room; speaker amps ruled out), second mic
    (needs `qcom,tx-channel-mapping` and probably driver work).
 
@@ -66,7 +70,8 @@ sm8450-hdk, X13s). Now the paths power with each stream after `RX_MCLK` and off 
 Also corrected (pkgrel=33): the amplifier roles were swapped. Stock DT + vendor wcd937x ("AW87xxx_SPK" after AUX PGA =
 pa-channel 0): 0x5b AW87559 = main speaker on AUX ("AUX Amp"), 0x58 AW87519 = earpiece on EAR ("EAR Amp").
 Ruled out on the way (for the record): amp register tables, codec/rx-macro registers (identical), SoundWire port switch,
-ignored SoundWire commands (debug patch, removed in pkgrel=35). Still open: pops/crackles (retest now that the paths follow
+ignored SoundWire commands (debug patch, removed in pkgrel=35). pkgrel=36 adds an amp `shutdown` handler (off table +
+reset, as the vendor driver). Still open: pops (retest now that the paths follow
 the stream; the vendor also mutes RX3 until the AUX PA is up and starts the SoundWire datapath in AUX PA PRE_PMU).
 Vendor sources used: Neternels/android_kernel_xiaomi_sunny (techpack wcd937x, aw87xxx), LineageOS sm6150 lineage-22.2.
 

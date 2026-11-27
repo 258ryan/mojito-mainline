@@ -3,7 +3,7 @@ maintainer=""
 _flavor="postmarketos-qcom-sm6150"
 pkgname=linux-$_flavor
 pkgver=7.4_rc4
-pkgrel=35
+pkgrel=36
 pkgdesc="Mainline kernel for SM6150 devices"
 arch="aarch64"
 _carch="arm64"
@@ -110,7 +110,7 @@ d22188c2c03a4aede0e7bd1f612cd63d0d6404aff8aebaa9c7cb76b7f3cfdd5d0ae4ced6f12143cf
 e83d331928cb14c7e6978710dcf2a1182725c0e835456ce23f99ec9262b9376070141a364fd9fe52f439c75f256e5b317c00e4d935f70be0ae2f48862a697480  0013-pmdomain-qcom-rpmhpd-add-mss-to-qcs615.patch
 af7dbecb52df628d56211938a665ef1080e67378efe032b1779a8abcc6d586bd07067e9443b0a729d449d8c2da5c6d561aeb54f41c7adb2c8467d64bcb315f2e  0014-iommu-arm-smmu-qcom-reserve-hyp-owned-context-banks-on-qcs615.patch
 e48f9fa7e681bf297eeedeaae816a28044ce77d9ef47e264b79d60bc75bcbbffea093c588f16e19f98da0e2edf3ce196e5903d592379ba701a384ff621c76fe2  0015-pinctrl-qcom-add-the-SM6150-LPASS-LPI-pin-controller.patch
-5e11104d8f4cfe1f3362083b874e7d2903f417a13f157ea111585e3a9ade48ceed2b66681d7567d8ca7ba0694cd0d1d2af1dae5ca7751e8f2272be524f7eab62  0016-ASoC-codecs-add-an-AW87xxx-amplifier-driven-by-a-register-sequence.patch
+d4924da990ca6cdbaf6481bc62b6b3af0ef1d34f8756048e349c47e736007fb6147174c3f45657e1df1d85550478d9ccf52e0ee7e424b9662938ead305d8066b  0016-ASoC-codecs-add-an-AW87xxx-amplifier-driven-by-a-register-sequence.patch
 9b6b0670fda6427064a029d632e11972a280628dcde94d92ea4749a841595cdb5f7da59ac3eaf526ab5da2bc3ace80c2af278961defd3c41468a36f51ea11101  0017-ASoC-codecs-wcd937x-count-every-user-of-the-RX-clock.patch
 fe45d9580689468da8a8655aa9377097f512d49e8fa047d8555403b0d6fe146a828e628fe384a80aab9192c3e291795905d0fb5edb99397c4e532aa7bd0e7197  0018-ASoC-codecs-lpass-rx-macro-set-the-AUX-DLY_Z-enable-bit.patch
 d7b28e122f11ccdcf38c3bd64fee877c3985af5892206b7eabe4d7373c549ccaf8a4d1710dcbf5abb30d0b50af62411d6f1bae3ba69f1b8de8fbeb6f7eeeb99c  0019-ASoC-codecs-wcd937x-make-the-RX-HPH-Mode-names-match-the-values.patch
