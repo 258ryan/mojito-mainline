@@ -13,7 +13,7 @@ Older detail (how each thing was found, dead ends, reverse engineering): [`docs/
 | Mobile data (LTE) | works; calls not set up |
 | CPU at full speed (1.71 / 2.21 GHz) with thermal throttling at 90 / 95 C | works (DTS, pkgrel=30) |
 | Accelerometer, light sensor, compass | works |
-| Speakers: left = earpiece (top), right = main speaker (bottom) | works |
+| Speakers: left = earpiece (top), right = main speaker (bottom) | earpiece works; bottom speaker silent after every boot until its path is re-powered once (open problem 1) |
 | Microphone (main, AMIC1) | works; hiss around 7 kHz, faint at the stock gain |
 | Power and both volume keys, vibrator | works; very short vibration pulses are hardly felt |
 | Charging from a wall charger, battery percentage | works |
@@ -39,20 +39,30 @@ Item 3 VERIFIED (one run): 20 s s2idle with RTC wake: screen back, ADSP and mode
 
 ## Open problems, most useful first
 
-1. **Suspend, further testing.** Fixed for a 20 s s2idle (patch 0020; before it the ADSP crashed on every resume). Still to
+1. **Bottom speaker silent after boot** (2026-11-27, reproduced 3 boots, U-Boot and ABL alike). The first AUX power-up after
+   boot gives no sound; after `amixer cset name='AUX Amp PA Switch' 0` then `1` during playback (DAPM re-powers WCD937x AUX
+   DAC/PGA and the amp) it works, also through later idle power cycles, until the next boot. NOT the cause: amp registers
+   (rewriting only the amp's on-sequence over I2C mid-stream stays silent), codec/rx-macro registers (full hardware dumps,
+   cache bypassed, identical in silent and working state), mixer/UCM (identical). AUX and HPHL `PDM WDOG` interrupts fire on
+   power cycles in both states (`/proc/interrupts`), likely at teardown; may be the pops/crackles the user hears (also: amp
+   enabled without settling delay, PulseAudio suspends the sink after 5 s idle). Next: compare the vendor techpack
+   wcd937x AUX enable sequence (delays, class-H order, `WCD937X_AUX_AUXPA` writes) with mainline; dumps in the private
+   `~/.claude-work/pmos-mojito/speaker-first-play-2026-11-27/`. Test with the phone logged in (an SSH-only `paplay` spawns a
+   PulseAudio without device access that plays to `auto_null`); `amixer` over SSH needs sudo (no uaccess).
+2. **Suspend, further testing.** Fixed for a 20 s s2idle (patch 0020; before it the ADSP crashed on every resume). Still to
    check: audio after resume, long sleeps, sleep started by Phosh/gsd-power (battery, 900 s idle; goes through elogind),
    wake by power button, incoming calls/data, and idle power draw. Only `s2idle` exists. Test:
    `echo +20 > /sys/class/rtc/rtc0/wakealarm; echo freeze > /sys/power/state` (run detached; write logs to disk).
-2. **Modem stalls at boot, sometimes** (`DOG detects stalled initialization` ~48 s). Seen on several boots, with stock and
+3. **Modem stalls at boot, sometimes** (`DOG detects stalled initialization` ~48 s). Seen on several boots, with stock and
    patched hexagonrpcd. `mojito-wifi` had not started hexagonrpcd yet (it waits for QMI 69, which had not appeared). It
    usually recovers; once it crashed every ~40 s until a clean reboot. Cause unknown: compare good and bad boot timelines.
-3. PC-port charging (add module parameters to the SMB5 driver to try register settings live; a bad setting can suspend USBIN
+4. PC-port charging (add module parameters to the SMB5 driver to try register settings live; a bad setting can suspend USBIN
    until a replug). Stock leaves `0x1366 = 0x03` on an SDP; the driver writes `0x02`.
-4. Modem appears to ModemManager only ~30 s after boot (OpenRC also lists `modemmanager` as failed although it runs).
-5. One boot hung at udev "Waiting for uevents" (cause unknown).
-6. Small: the DTS comment above `&gpu` still says the GPU firmware comes through downstream `/lib/firmware/qcom` symlinks;
+5. Modem appears to ModemManager only ~30 s after boot (OpenRC also lists `modemmanager` as failed although it runs).
+6. One boot hung at udev "Waiting for uevents" (cause unknown).
+7. Small: the DTS comment above `&gpu` still says the GPU firmware comes through downstream `/lib/firmware/qcom` symlinks;
    it now comes from `firmware-xiaomi-mojito-mainline` via the `/lib/firmware/postmarketos` search path. Fix with the next kernel change.
-7. Calls (q6voiced and surya's q6voice patches), mic noise (retest in a quiet room; speaker amps ruled out), second mic
+8. Calls (q6voiced and surya's q6voice patches), mic noise (retest in a quiet room; speaker amps ruled out), second mic
    (needs `qcom,tx-channel-mapping` and probably driver work), speaker amps stay powered while idle.
 
 ## CPU speed and throttling (done in pkgrel=30, DTS only)
@@ -144,8 +154,9 @@ from the packaged `u-boot.img`: ABL silently refused images packed with the r29t
 | hexagonrpcd patch not upstream | send it |
 
 Already removed: hand-installed files and the borrowed downstream initramfs (device package `mojito-device`), `pd_ignore_unused`, discarded sensor-registry writes, log-line readiness guessing, numeric `RX HPH Mode`,
-hand-added `audio video input` user groups (same mechanism), greeter PulseAudio `autospawn = no` (not needed: the greeter's PulseAudio exits at login and elogind's uaccess ACLs hand
-`/dev/snd` to the user session; verified with a test sound 2026-11-27).
+hand-added `audio video input` user groups (same mechanism), greeter PulseAudio `autospawn = no` (not needed: elogind's uaccess ACLs hand `/dev/snd` to the user session; verified with a
+test sound 2026-11-27. The greeter's PulseAudio does NOT exit at login: its feedbackd keeps it alive, and elogind does not kill
+a closed session's processes. It keeps only `controlC0` open, no PCM; stock pmOS/phrog behaviour, harmless).
 
 ## The phone (slot B; slot A retired)
 
@@ -185,6 +196,9 @@ audio); keep tones quiet and short; make trial settings revert themselves; ask b
 - Large transfers over USB networking can freeze the phone; use Wi-Fi. USB networking sometimes drops while the phone is fine.
 - A stuck phone: Power + Volume-down for 10-15 s reaches fastboot. No log survives a reset.
 - The speakers have no protection algorithm.
+- `clk_ignore_unused` test boot (2026-11-27, one-shot systemd-boot entry `pmos-noclk+1-0.conf`): 23 unclaimed GCC/disp_cc/ce
+  clocks were turned off at 1.0 s; display blinked green until msm took over (simplefb holds no clocks), Bluetooth's second
+  setup failed (-84); UFS, USB, Wi-Fi, modem, GPU fine. Fix needs consumers for those clocks (framebuffer clocks first).
 - Live SoundWire debugfs register writes leave the codec's register cache stale; reboot before judging anything after them.
 - The clock starts in 1970 until swclock/NTP; meson and similar reject "future" timestamps (`tar -m`).
 - `pkill -f pattern` kills the calling shell if its command line contains the pattern.
