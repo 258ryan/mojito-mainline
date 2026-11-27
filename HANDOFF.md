@@ -1,6 +1,6 @@
 # Handoff: postmarketOS on the Redmi Note 10 (mojito / sunny)
 
-State as of 2026-11-27, mainline Linux 7.4-rc4, kernel package `pkgrel=40`, device package 2-r4, hexagonrpcd-mojito r3, installed as a package and booted through U-Boot (`boot_b`) + systemd-boot. Read this file first.
+State as of 2026-11-27, mainline Linux 7.4-rc4, kernel package `pkgrel=40`, device package 2-r5, hexagonrpcd-mojito r3, installed as a package and booted through U-Boot (`boot_b`) + systemd-boot. Read this file first.
 Older detail (how each thing was found, dead ends, reverse engineering): [`docs/HANDOFF-history.md`](docs/HANDOFF-history.md).
 
 ## Status
@@ -12,7 +12,7 @@ Older detail (how each thing was found, dead ends, reverse engineering): [`docs/
 | Wi-Fi (~18 s after boot), Bluetooth (~19 s) | works |
 | Mobile data (LTE) | works; calls not set up |
 | CPU at full speed (1.71 / 2.21 GHz) with thermal throttling at 90 / 95 C | works (DTS, pkgrel=30) |
-| Accelerometer, light sensor, compass | works |
+| Accelerometer, light sensor, compass; auto-rotation (landscape direction fixed 2026-11-27, device 2-r5) | works |
 | Speakers: left = earpiece (top), right = main speaker (bottom) | works (bottom speaker fixed 2026-11-27, pkgrel=34) |
 | Microphone (main, AMIC1) | works; hiss around 7 kHz, faint at the stock gain |
 | Power and both volume keys, vibrator | works; very short vibration pulses are hardly felt |
@@ -97,6 +97,24 @@ ignored SoundWire commands (debug patch, removed in pkgrel=35). pkgrel=36 adds a
 reset, as the vendor driver). Still open: pops (retest now that the paths follow
 the stream; the vendor also mutes RX3 until the AUX PA is up and starts the SoundWire datapath in AUX PA PRE_PMU).
 Vendor sources used: Neternels/android_kernel_xiaomi_sunny (techpack wcd937x, aw87xxx), LineageOS sm6150 lineage-22.2.
+
+## Public firmware package (IN PROGRESS, 2026-11-27)
+
+Goal: a public firmware source so the port can go to pmaports (testing). The private package is a full copy of the vendor
+firmware partitions and must not be published as is.
+- Must NOT go public: `sensors/registry` (this unit's persist data incl. factory calibration). Not needed: with an empty
+  registry the sensor PD rebuilt it (142 files) from `sensors/config`; sensors, rotation and Wi-Fi worked (tested, the
+  original registry was restored).
+- Not needed / keep out: TrustZone apps and DRM (widevine, mlipay, soter64, secauth, mfido, fpctzapp, hdcp*, vsimapp,
+  cardapp, haventkn, gptest, smplap*, securemm, rtic, cmnlib*), cpe_9340, CAMERA_ICP, other chips' BT files.
+- Actually loaded (dmesg + modem TFTP log): modem.*, adsp.*, ipa_fws.*, a612_zap.*, wlanmdsp.mbn, modem_pr/mcfg, ath10k
+  board.bin + android/{bdf_gl,regdb}.bin, qca/cmbtfw12.tlv + cmnv12.bin, hexagonrpcd sensors/config + sns_reg.conf +
+  dsp/adsp + socinfo; a630_sqe.fw + a612_rgmu.bin come from Alpine linux-firmware-qcom.
+- Provenance check against the official V14.0.9.0.SKGMIXM fastboot ROM extract (`pmos-mojito/stock/extract`): 337 of 443
+  needed files identical. The 26 adsp.* files DIFFER (the package has another ADSP build than this ROM: earlier notes say
+  ADSP.VT.5.3-00316 vs the phone's -00323); sensors/config, dsp/adsp and socinfo were not in that extract yet.
+  Next: take every public file from the official ROM images (NON-HLOS.bin, BTFM.bin, dspso.bin, vendor), re-test, then
+  the user decides where to host it (public repo of blobs, as other pmOS ports do, or extraction from the ROM at build).
 
 ## CPU speed and throttling (done in pkgrel=30, DTS only)
 
