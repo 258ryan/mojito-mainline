@@ -1,0 +1,214 @@
+WIP, not in the kernel package: upload custom processing chains to the audio DSP (AVCS_CMD_REGISTER_TOPOLOGIES).
+Usage: echo <firmware file> > /sys/module/q6core/parameters/register_topologies
+The file is NOT part of this repository (vendor data): variable-length list from the phone owner's stock calibration database:
+u32 count, then per chain u32 version(2), topology_id, type(9 = voice), n, n * (u32 module_id, u32 instance_id).
+The fixed-size (392 bytes per entry) layout is rejected with ADSP_EBADPARAM. The memory is mapped through the ASM DAI
+device's SMMU stream (shortcut: q6core needs its own).
+---
+diff -urN a/sound/soc/qcom/qdsp6/q6core.c b/sound/soc/qcom/qdsp6/q6core.c
+--- a/sound/soc/qcom/qdsp6/q6core.c	2026-11-28 02:45:14.562514132 +0500
++++ b/sound/soc/qcom/qdsp6/q6core.c	2026-11-28 02:45:14.563718475 +0500
+@@ -10,6 +10,11 @@
+ #include <linux/of.h>
+ #include <linux/of_platform.h>
+ #include <linux/jiffies.h>
++#include <linux/dma-mapping.h>
++#include <linux/firmware.h>
++#include <linux/of_platform.h>
++#include <linux/platform_device.h>
++#include <linux/moduleparam.h>
+ #include <linux/soc/qcom/apr.h>
+ #include "q6core.h"
+ #include "q6dsp-errno.h"
+@@ -22,6 +27,10 @@
+ #define AVCS_GET_VERSIONS_RSP   0x00012906
+ #define AVCS_CMD_GET_FWK_VERSION	0x001292c
+ #define AVCS_CMDRSP_GET_FWK_VERSION	0x001292d
++#define AVCS_CMD_REGISTER_TOPOLOGIES		0x00012923
++#define AVCS_CMD_SHARED_MEM_MAP_REGIONS		0x00012924
++#define AVCS_CMDRSP_SHARED_MEM_MAP_REGIONS	0x00012925
++#define AVCS_CMD_SHARED_MEM_UNMAP_REGIONS	0x00012926
+ 
+ struct avcs_svc_info {
+ 	uint32_t service_id;
+@@ -63,6 +72,10 @@
+ 	bool get_state_supported;
+ 	bool get_version_supported;
+ 	bool is_version_requested;
++	/* topology upload: the reply of the command under way */
++	bool topo_done;
++	uint32_t topo_status;
++	uint32_t topo_handle;
+ };
+ 
+ static struct q6core *g_core;
+@@ -75,9 +88,22 @@
+ 
+ 	result = data->payload;
+ 	switch (hdr->opcode) {
++	case AVCS_CMDRSP_SHARED_MEM_MAP_REGIONS:
++		core->topo_handle = *(const uint32_t *)data->payload;
++		core->topo_status = 0;
++		core->topo_done = true;
++		wake_up(&core->wait);
++		break;
+ 	case APR_BASIC_RSP_RESULT:{
+ 		result = data->payload;
+ 		switch (result->opcode) {
++		case AVCS_CMD_SHARED_MEM_MAP_REGIONS:
++		case AVCS_CMD_REGISTER_TOPOLOGIES:
++		case AVCS_CMD_SHARED_MEM_UNMAP_REGIONS:
++			core->topo_status = result->status;
++			core->topo_done = true;
++			wake_up(&core->wait);
++			break;
+ 		case AVCS_GET_VERSIONS:
+ 			if (result->status == ADSP_EUNSUPPORTED)
+ 				core->get_version_supported = false;
+@@ -325,6 +351,146 @@
+ }
+ EXPORT_SYMBOL_GPL(q6core_is_adsp_ready);
+ 
++struct avcs_cmd_map {
++	struct apr_hdr hdr;
++	uint16_t mem_pool_id;
++	uint16_t num_regions;
++	uint32_t property_flag;
++	uint32_t addr_lsw;
++	uint32_t addr_msw;
++	uint32_t size;
++} __packed;
++
++struct avcs_cmd_register {
++	struct apr_hdr hdr;
++	uint32_t addr_lsw;
++	uint32_t addr_msw;
++	uint32_t handle;
++	uint32_t size;
++} __packed;
++
++struct avcs_cmd_unmap {
++	struct apr_hdr hdr;
++	uint32_t handle;
++} __packed;
++
++static int q6core_topo_send(struct q6core *core, struct apr_hdr *hdr, uint32_t opcode, int size)
++{
++	int ret;
++
++	hdr->hdr_field = APR_HDR_FIELD(APR_MSG_TYPE_SEQ_CMD, APR_HDR_LEN(APR_HDR_SIZE), APR_PKT_VER);
++	hdr->pkt_size = size;
++	hdr->src_port = 0;
++	hdr->dest_port = 0;
++	hdr->token = 0;
++	hdr->opcode = opcode;
++	core->topo_done = false;
++	core->topo_status = 0;
++
++	ret = apr_send_pkt(core->adev, (struct apr_pkt *)hdr);
++	if (ret < 0)
++		return ret;
++	if (!wait_event_timeout(core->wait, core->topo_done, msecs_to_jiffies(1000)))
++		return -ETIMEDOUT;
++	if (core->topo_status) {
++		dev_err(&core->adev->dev, "topology upload: command %#x failed with error %u\n", opcode, core->topo_status);
++		return -EIO;
++	}
++	return 0;
++}
++
++/*
++ * Give the DSP custom processing chains (AVCS_CMD_REGISTER_TOPOLOGIES), read from a file the owner of the phone extracts
++ * from the stock calibration database. TEST: the buffer is mapped through the ASM DAI device's SMMU stream, which this
++ * service has none of its own.
++ */
++static int q6core_register_topologies(const char *name)
++{
++	struct q6core *core = g_core;
++	const struct firmware *fw;
++	struct device_node *np;
++	struct platform_device *asm_pdev = NULL;
++	struct of_phandle_args args;
++	struct avcs_cmd_map map = {};
++	struct avcs_cmd_register reg = {};
++	struct avcs_cmd_unmap unmap = {};
++	dma_addr_t dma;
++	u64 phys;
++	void *buf;
++	size_t len;
++	int ret;
++
++	if (!core)
++		return -ENODEV;
++
++	ret = request_firmware(&fw, name, &core->adev->dev);
++	if (ret)
++		return ret;
++	if (!fw->size || fw->size > SZ_64K) {
++		ret = -EINVAL;
++		goto release;
++	}
++
++	np = of_find_compatible_node(NULL, NULL, "qcom,q6asm-dais");
++	if (np)
++		asm_pdev = of_find_device_by_node(np);
++	if (!asm_pdev || of_parse_phandle_with_fixed_args(np, "iommus", 1, 0, &args)) {
++		ret = -ENODEV;
++		goto put;
++	}
++	of_node_put(args.np);
++
++	len = PAGE_ALIGN(fw->size);
++	buf = dma_alloc_coherent(&asm_pdev->dev, len, &dma, GFP_KERNEL);
++	if (!buf) {
++		ret = -ENOMEM;
++		goto put;
++	}
++	memcpy(buf, fw->data, fw->size);
++	phys = dma | ((u64)(args.args[0] & 0xf) << 32);
++
++	mutex_lock(&core->lock);
++	map.mem_pool_id = 3;	/* shared memory, 8-byte, 4K pool */
++	map.num_regions = 1;
++	map.addr_lsw = lower_32_bits(phys);
++	map.addr_msw = upper_32_bits(phys);
++	map.size = len;
++	ret = q6core_topo_send(core, &map.hdr, AVCS_CMD_SHARED_MEM_MAP_REGIONS, sizeof(map));
++	if (!ret) {
++		reg.addr_lsw = map.addr_lsw;
++		reg.addr_msw = map.addr_msw;
++		reg.handle = core->topo_handle;
++		reg.size = fw->size;
++		unmap.handle = core->topo_handle;
++		ret = q6core_topo_send(core, &reg.hdr, AVCS_CMD_REGISTER_TOPOLOGIES, sizeof(reg));
++		q6core_topo_send(core, &unmap.hdr, AVCS_CMD_SHARED_MEM_UNMAP_REGIONS, sizeof(unmap));
++	}
++	mutex_unlock(&core->lock);
++
++	dma_free_coherent(&asm_pdev->dev, len, buf, dma);
++	if (!ret)
++		dev_info(&core->adev->dev, "registered the topologies in %s (%zu bytes)\n", name, fw->size);
++put:
++	if (asm_pdev)
++		put_device(&asm_pdev->dev);
++	of_node_put(np);
++release:
++	release_firmware(fw);
++	return ret;
++}
++
++static int register_topologies_set(const char *val, const struct kernel_param *kp)
++{
++	char name[128];
++
++	strscpy(name, val, sizeof(name));
++	return q6core_register_topologies(strim(name));
++}
++
++static const struct kernel_param_ops register_topologies_ops = { .set = register_topologies_set };
++module_param_cb(register_topologies, &register_topologies_ops, NULL, 0200);
++MODULE_PARM_DESC(register_topologies, "write a firmware file name to upload its custom topologies to the DSP");
++
+ static int q6core_probe(struct apr_device *adev)
+ {
+ 	g_core = kzalloc_obj(*g_core);

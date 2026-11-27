@@ -52,6 +52,15 @@ Item 3 VERIFIED (one run): 20 s s2idle with RTC wake: screen back, ADSP and mode
   none, 1/2 RX channels, stream and vocproc unmute, early and late start, the SDM845 driver's sequence by parameters.
   Next: decode the stock calibration database (vendor /etc/acdbdata) for the topology IDs and tables, else record what
   stock sends during a call.
+  Later (2026-11-28): the stock calibration database (vendor /etc/acdbdata/IDP) gives per-device voice topologies in
+  property 0x113af (what libaudcal's AcdbCmdGetVocProcCmnTopId reads): handset mic (device 4) 0x10000003, earpiece
+  (device 7) 0x1000fffd. Both are custom: rejected at topology commit until uploaded (`mainline/wip/calls/`). After the
+  upload the EARPIECE chain commits and the call runs with every command successful, but received audio is still silent; the
+  mic chain is still rejected (use SM_ECNS_V2). A failed commit leaves a stuck vocproc until reboot. A call can be set up
+  without calling: enable the two CS-Voice mixers and run aplay + arecord on hw:0,4. Also tried: media stream and route
+  off during the call. Remaining lead: the voice volume calibration table (stock registers it, then sets the volume step,
+  which is rejected without it), else record stock. The Pixel 3a (sdm670-mainline) selects database topologies in its UCM
+  profile; its IDs are not known to this firmware.
   Module-only builds: no MODVERSIONS or signing, so `make M=sound/soc/qcom/qdsp6` in a patched tree with the package config.
 - **Modem startup stall still happens** on r40/r41 (`packet before probe, dropped`, then the watchdog at ~50 s; it
   recovers). Patch 0021 is therefore incomplete.
