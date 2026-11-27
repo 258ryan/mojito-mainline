@@ -17,6 +17,18 @@ recovered by itself on the r28 boot (Wi-Fi ~60 s, mobile data connected); on the
 with the stock hexagonrpcd. Unproven idea: this boot-order wait and the modem's start-up race each other. Next: compare dmesg
 and service start times of good and bad boots.
 
+### Suspend: first test (2026-11-27), broken on resume
+`echo freeze > /sys/power/state` with an RTC wakealarm (+20 s; the PM8xxx alarm works, `mem_sleep` is s2idle only, no
+CONFIG_PM_DEBUG so no pm_test): suspend and resume succeed, then within 0.1 s the ADSP sensor PD crashes (`frpc_dsp`), the ADSP
+crashes twice (`sns_sig_remote`, `NOC error`), AFE calls fail and ath10k cannot re-enable (Wi-Fi gone until reboot); modem
+survived. The following soft reboot hung and needed a forced restart. Idea, unproven: the frozen hexagonrpcd / interrupted
+FastRPC invoke is not recovered (see fastrpc.c `-ERESTARTSYS` handling). NOTE: gsd-power suspends on battery after 900 s idle,
+which would trigger this. Log: private audio-speaker folder, `suspend-test-1.log`.
+
+### CPU top speed lead
+Every boot logs `cpu cpuN: Voltage update failed freq=1708800` (cpu0) and `2016000/2112000/2208000` (cpu6): OPPs above
+1.59 / 1.9 GHz are rejected, matching the observed maximum. Not investigated yet.
+
 ### Workarounds: progress
 - File server: DONE. `mainline/hexagonrpc/` now stores the sensor registry (`-w`) and reports idle (`-i`); the discard version and
   the log-line guess in `mojito-wifi` are gone. Wi-Fi ~18 s with a saved registry (one boot, hand-set config; the final default
