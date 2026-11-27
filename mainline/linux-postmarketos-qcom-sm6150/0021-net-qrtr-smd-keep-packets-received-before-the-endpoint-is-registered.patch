@@ -1,0 +1,115 @@
+From: 258ryan <20981851+258ryan@users.noreply.github.com>
+Subject: [PATCH] net: qrtr: smd: keep packets received before the endpoint is registered
+
+The rpmsg core opens the channel before calling probe, so the remote can
+send before probe has registered the qrtr endpoint and set the driver data.
+The callback then returned -EAGAIN, which glink and smd ignore: the packet was
+lost. The first packet is the remote's HELLO, which is never resent; without
+it the name service never sends the remote its server list. On the Redmi Note
+10 (SM6150) the modem then waited for rmtfs until its watchdog fired ("DOG
+detects stalled initialization"), on about 40% of boots, and again after the
+restart.
+
+Set the driver data first, queue packets until the endpoint is registered,
+deliver them in order, and warn if a packet still arrives before probe.
+---
+--- a/net/qrtr/smd.c	2026-11-27 21:21:46.205620930 +0500
++++ b/net/qrtr/smd.c	2026-11-27 21:30:57.255158152 +0500
+@@ -14,6 +14,11 @@
+ 	struct qrtr_endpoint ep;
+ 	struct rpmsg_endpoint *channel;
+ 	struct device *dev;
++
++	/* packets received before the qrtr endpoint was registered */
++	spinlock_t lock;
++	bool ready;
++	struct sk_buff_head backlog;
+ };
+ 
+ /* from smd to qrtr */
+@@ -21,12 +26,33 @@
+ 				  void *data, int len, void *priv, u32 addr)
+ {
+ 	struct qrtr_smd_dev *qdev = dev_get_drvdata(&rpdev->dev);
++	struct sk_buff *skb;
++	unsigned long flags;
+ 	int rc;
+ 
+-	if (!qdev)
++	if (!qdev) {
++		/* glink and smd ignore the return value: this packet is lost */
++		dev_warn_ratelimited(&rpdev->dev, "packet before probe, dropped\n");
+ 		return -EAGAIN;
++	}
+ 
++	spin_lock_irqsave(&qdev->lock, flags);
++	if (!qdev->ready) {
++		/*
++		 * The channel was opened before probe registered the qrtr
++		 * endpoint; keep the packet (typically the remote's HELLO, which
++		 * is never resent) until the endpoint exists.
++		 */
++		skb = alloc_skb(len, GFP_ATOMIC);
++		if (skb) {
++			skb_put_data(skb, data, len);
++			__skb_queue_tail(&qdev->backlog, skb);
++		}
++		spin_unlock_irqrestore(&qdev->lock, flags);
++		return 0;
++	}
+ 	rc = qrtr_endpoint_post(&qdev->ep, data, len);
++	spin_unlock_irqrestore(&qdev->lock, flags);
+ 	if (rc == -EINVAL) {
+ 		dev_err(qdev->dev, "invalid ipcrouter packet\n");
+ 		/* return 0 to let smd drop the packet */
+@@ -59,6 +85,8 @@
+ static int qcom_smd_qrtr_probe(struct rpmsg_device *rpdev)
+ {
+ 	struct qrtr_smd_dev *qdev;
++	struct sk_buff *skb;
++	unsigned long flags;
+ 	int rc;
+ 
+ 	qdev = devm_kzalloc_obj(&rpdev->dev, *qdev);
+@@ -68,12 +96,31 @@
+ 	qdev->channel = rpdev->ept;
+ 	qdev->dev = &rpdev->dev;
+ 	qdev->ep.xmit = qcom_smd_qrtr_send;
++	spin_lock_init(&qdev->lock);
++	skb_queue_head_init(&qdev->backlog);
++
++	/*
++	 * The rpmsg core opened the channel before calling probe, so the remote
++	 * may already be sending: make the callback find us (it queues until
++	 * the endpoint is registered) before doing anything slow.
++	 */
++	dev_set_drvdata(&rpdev->dev, qdev);
+ 
+ 	rc = qrtr_endpoint_register(&qdev->ep, QRTR_EP_NID_AUTO);
+-	if (rc)
++	if (rc) {
++		dev_set_drvdata(&rpdev->dev, NULL);
++		skb_queue_purge(&qdev->backlog);
+ 		return rc;
++	}
+ 
+-	dev_set_drvdata(&rpdev->dev, qdev);
++	/* deliver what arrived meanwhile, in order, then switch to direct delivery */
++	spin_lock_irqsave(&qdev->lock, flags);
++	while ((skb = __skb_dequeue(&qdev->backlog))) {
++		qrtr_endpoint_post(&qdev->ep, skb->data, skb->len);
++		kfree_skb(skb);
++	}
++	qdev->ready = true;
++	spin_unlock_irqrestore(&qdev->lock, flags);
+ 
+ 	dev_dbg(&rpdev->dev, "Qualcomm SMD QRTR driver probed\n");
+ 
+@@ -87,6 +134,7 @@
+ 	qrtr_endpoint_unregister(&qdev->ep);
+ 
+ 	dev_set_drvdata(&rpdev->dev, NULL);
++	skb_queue_purge(&qdev->backlog);
+ }
+ 
+ static const struct rpmsg_device_id qcom_smd_qrtr_smd_match[] = {

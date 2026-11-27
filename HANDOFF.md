@@ -1,6 +1,6 @@
 # Handoff: postmarketOS on the Redmi Note 10 (mojito / sunny)
 
-State as of 2026-11-27, mainline Linux 7.4-rc4, kernel package `pkgrel=38`, device package 2-r3, installed as a package and booted through U-Boot (`boot_b`) + systemd-boot. Read this file first.
+State as of 2026-11-27, mainline Linux 7.4-rc4, kernel package `pkgrel=40`, device package 2-r4, hexagonrpcd-mojito r3, installed as a package and booted through U-Boot (`boot_b`) + systemd-boot. Read this file first.
 Older detail (how each thing was found, dead ends, reverse engineering): [`docs/HANDOFF-history.md`](docs/HANDOFF-history.md).
 
 ## Status
@@ -43,19 +43,21 @@ Item 3 VERIFIED (one run): 20 s s2idle with RTC wake: screen back, ADSP and mode
    check: audio after resume, long sleeps, sleep started by Phosh/gsd-power (battery, 900 s idle; goes through elogind),
    wake by power button, incoming calls/data, and idle power draw. Only `s2idle` exists. Test:
    `echo +20 > /sys/class/rtc/rtc0/wakealarm; echo freeze > /sys/power/state` (run detached; write logs to disk).
-2. **Modem stalls at boot, ~40% of boots** (`dog_hal_common.c:173: DOG detects stalled initialization` ~40 s after start,
-   then it restarts and works; Wi-Fi/data come ~40 s late). Findings 2026-11-27 (12 recorded boots, all test changes removed):
-   - In a stall the modem registers only QMI 43 (SSCTL) and 66 (servreg notifier), then nothing until the watchdog; in good
-     boots 15/51/21(EFS)/22/23/24/36... follow ~0.2 s later.
-   - It never sends rmtfs a request in the stalled run (no `open /boot/modem_fs1`); `rmtfs -v` + `tqftpserv -d` logs.
-   - Not rmtfs starting the modem too early: with rmtfs without `-s` and the modem started 2 s after rmtfs' service was
-     visible, a boot still stalled. rmtfs, tqftpserv, pd-mapper (64/1/1), IPA (49/1/1), TFTP (4096) are registered first.
-   - With `trace_event=qrtr:* trace_buf_size=4M` on the command line: 0 stalls in 5 boots (vs 3 in 7 without): a timing race
-     in the first second of the QRTR handshake is likely (tracing slows the name service). Good boot sequence: modem
-     `hello` x2 -> ns advertises 14/64/49/4096 (twice) -> modem adds 43, 66 -> ~0.2 s later the rest. Next: catch a stall
-     with lighter tracing (only `qrtr_ns_message`, or a ring of timestamps), compare with the good sequence above.
-   - Not yet tested: EFS writes (`rmtfs_avoid_writing="true"` is the pmOS default here: the modem's EFS writes are dropped).
-   Logs on the phone: /var/tmp/modemboot-logs/ (private: contain no identifiers, but keep off the public repo).
+2. **Modem stalled at boot on ~40% of boots: FIXED by patch 0021 (kernel pkgrel=40); keep an eye on it.**
+   `dog_hal_common.c:173: DOG detects stalled initialization` ~40 s after start, restart, sometimes repeatedly (one boot:
+   3 stalls in a row). Light qrtr tracing (`qrtr_ns_message`, enabled from a boot-runlevel service) caught it: in a stalled
+   run the modem's `hello` never reaches the name service, so the name service never sends it the server list (rmtfs 14,
+   pd-mapper 64, IPA 49, TFTP 4096); the modem registers 43 and 66, never contacts rmtfs, and its watchdog fires. Cause in
+   `net/qrtr/smd.c`: with the driver-level `.callback` the rpmsg core creates/opens the channel endpoint before probe; a
+   HELLO arriving before probe has set the driver data makes the callback return -EAGAIN, which glink ignores (buffer
+   released), so the HELLO is lost. Patch 0021 (r40) sets the driver data first, queues packets until the qrtr endpoint is
+   registered, delivers them in order, and warns ("packet before probe, dropped") if one still arrives before probe.
+   Upstream candidate (net/qrtr). Verified: 5 untraced boots on r40, 0 stalls, 0 early drops, modem 42 services, Wi-Fi and
+   ModemManager up each time (before: 3 stalls in 7 boots; 5 clean by chance at 40% would be ~8%). Series stopped there.
+   FAILED attempt r39 (do not retry): driver without `.callback`, endpoint created in probe with rpmsg_create_ept() - on
+   glink that needs the core-created `rpdev->ept` as parent; QRTR to modem AND ADSP was dead (rolled back to r38).
+   Earlier findings, for the record: not rmtfs starting the modem early (delayed start still stalled); command-line qrtr
+   tracing hid the race (0/5). Not tested: EFS writes (`rmtfs_avoid_writing="true"`). Logs: /var/tmp/modemboot-logs/.
 3. PC-port charging (add module parameters to the SMB5 driver to try register settings live; a bad setting can suspend USBIN
    until a replug). Stock leaves `0x1366 = 0x03` on an SDP; the driver writes `0x02`.
 4. Modem appears to ModemManager only ~30 s after boot (OpenRC also lists `modemmanager` as failed although it runs).
