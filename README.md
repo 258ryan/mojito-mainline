@@ -8,12 +8,13 @@ Linux 7.4-rc4 with `sm6150-xiaomi-mojito.dts` on top of mainline's `talos.dtsi`,
 
 | Works | Not yet |
 |---|---|
-| Display with brightness and smooth dimming, touch, GPU, Phosh | Suspend (fix being tested) |
-| Wi-Fi, Bluetooth, mobile data | Calls |
-| Both speakers, main microphone | Headphones, second microphone |
-| Accelerometer, light sensor, compass | Camera, GPS, NFC, fingerprint |
-| Power and volume keys, vibrator | Charging from a PC USB port |
-| Wall charging, battery percentage | Full CPU top speed |
+| Display with brightness and smooth dimming, touch, GPU, Phosh | Calls |
+| Wi-Fi, Bluetooth, mobile data | Headphones, second microphone |
+| Both speakers, main microphone | Camera, GPS, NFC, fingerprint |
+| Accelerometer, light sensor, compass | Charging from a PC USB port |
+| Power and volume keys, vibrator | Full CPU top speed |
+| Wall charging, battery percentage | |
+| Suspend (only briefly tested) | |
 
 It is a development port, not an installable image: there is no device package yet, and several pieces are set up by hand.
 

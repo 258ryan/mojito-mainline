@@ -16,7 +16,7 @@ Older detail (how each thing was found, dead ends, reverse engineering): [`docs/
 | Power and both volume keys, vibrator | works; very short vibration pulses are hardly felt |
 | Charging from a wall charger, battery percentage | works |
 | Charging from a PC USB port | broken or unreliable (old notes disagree: 500 mA / 50 mA) |
-| Suspend | broken on resume with pkgrel<=28; pkgrel=29 carries an **untested** fix (below) |
+| Suspend (s2idle) | works in a 20 s test since pkgrel=29; longer sleeps, desktop-initiated sleep and power draw untested |
 | Headphones, second microphone, calls, camera, GPS, NFC, fingerprint | not working or never tried |
 
 ### Added in pkgrel=29 and still to be verified by hand
@@ -27,6 +27,8 @@ Item 1 VERIFIED: right channel heard from the bottom speaker; codec 3008=c3 3408
 `EAR_PA Volume` 6 = -3 dB; headphones stay at 72), confirmed good by ear while raising the volume. There is no speaker
 protection processing: lower these if distortion or heating shows up.
 Item 2 VERIFIED: screen off looks right (no bars).
+Item 3 VERIFIED (one run): 20 s s2idle with RTC wake: screen back, ADSP and modem running, no crash lines, Wi-Fi reassociated
+(gateway reachable), sensors and Bluetooth fine.
 
 1. Patch 0019: `RX HPH Mode` item names fixed; UCM selects `CLS_AB` by name (older kernels would pick another mode).
    Check: speaker test in Phosh (both sides).
@@ -35,12 +37,10 @@ Item 2 VERIFIED: screen off looks right (no bars).
 
 ## Open problems, most useful first
 
-1. **Suspend.** `mem_sleep` is s2idle only. With pkgrel=28 suspend and resume succeed, then the ADSP sensor PD crashes
-   (`frpc_dsp`), the ADSP crashes twice and Wi-Fi is lost until reboot; the next soft reboot hung. Cause (inferred from the
-   driver): the freezer interrupted `hexagonrpcd`'s blocked invoke, which restarts and is sent to the DSP again. Test:
-   `echo +20 > /sys/class/rtc/rtc0/wakealarm; echo freeze > /sys/power/state` (run detached; the PM8xxx alarm wakes it; logs do
-   not survive a reset, so write them to disk). If it still crashes, build with `CONFIG_PM_DEBUG` and use `pm_test`.
-   `gsd-power` suspends on battery after 900 s idle (left enabled at the user's request).
+1. **Suspend, further testing.** Fixed for a 20 s s2idle (patch 0020; before it the ADSP crashed on every resume). Still to
+   check: audio after resume, long sleeps, sleep started by Phosh/gsd-power (battery, 900 s idle; goes through elogind),
+   wake by power button, incoming calls/data, and idle power draw. Only `s2idle` exists. Test:
+   `echo +20 > /sys/class/rtc/rtc0/wakealarm; echo freeze > /sys/power/state` (run detached; write logs to disk).
 2. **Modem stalls at boot, sometimes** (`DOG detects stalled initialization` ~48 s). Seen on several boots, with stock and
    patched hexagonrpcd. `mojito-wifi` had not started hexagonrpcd yet (it waits for QMI 69, which had not appeared). It
    usually recovers; once it crashed every ~40 s until a clean reboot. Cause unknown: compare good and bad boot timelines.
