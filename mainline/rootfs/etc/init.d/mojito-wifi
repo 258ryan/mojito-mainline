@@ -12,7 +12,10 @@
 
 name="mojito Wi-Fi (sensor PD + ath10k)"
 supervisor=supervise-daemon
-command=/usr/bin/hexagonrpcd
+# Prefer the patched build (mainline/hexagonrpc/): it cuts the wait below from ~35 s to a few seconds.
+# /etc/conf.d/mojito-wifi can set hexagonrpcd_bin to force one or the other.
+[ -x /usr/local/bin/hexagonrpcd-mojito ] && : "${hexagonrpcd_bin:=/usr/local/bin/hexagonrpcd-mojito}"
+command=${hexagonrpcd_bin:-/usr/bin/hexagonrpcd}
 command_args="-f /dev/fastrpc-adsp-secure -d adsp -s -R /usr/share/qcom/sm6150/Xiaomi/mojito"
 LOG=/run/hexagonrpcd/sensorspd.log
 output_log=$LOG
@@ -41,9 +44,11 @@ start_post() {
 	  for i in $(seq 1 360); do
 		n=$(wc -l < $LOG 2>/dev/null || echo 0)
 		[ "$n" = "$last" ] && quiet=$((quiet+1)) || quiet=0; last=$n
-		[ "$n" -ge 100 ] && [ $quiet -ge 6 ] && break
+		[ "$n" -ge "${wifi_min_lines:-100}" ] && [ $quiet -ge "${wifi_quiet_polls:-6}" ] && break
 		sleep 0.5
 	  done
+	  # accelerometer, light and compass come from the same sensor PD: (re)start the proxy now it is served
+	  rc-service --ifexists iio-sensor-proxy restart >/dev/null 2>&1
 	  lsmod | grep -q '^ath10k_snoc ' && exit 0
 	  before=$(dmesg | grep -c 'capability req rejected')
 	  logger -t mojito-wifi "sensor PD served ($n lines), loading ath10k_snoc"

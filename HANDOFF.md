@@ -5,6 +5,16 @@ State as of 2026-11-27 (Wi-Fi work 2026-11-26/27).
 
 ## START HERE (2026-11-27, end of the long session): where things stand
 
+### Faster Wi-Fi/Bluetooth and a correct clock (2026-11-27)
+- `mainline/hexagonrpc/` patch (writes accepted and discarded, >256 B input buffers, rename ignored), installed on the phone as
+  `/usr/local/bin/hexagonrpcd-mojito`: ath10k up ~16 s and BT ~17 s after boot (were ~50 s), checked on a normal reboot; mobile
+  data connected; sensors read (accelerometer, light, compass). Two earlier trials with incomplete versions crash-looped the server
+  and the modem then stalled ("DOG detects stalled initialization") until a clean reboot. One trial boot hung at udev "Waiting for
+  uevents" (cause not found; Power+Vol-down recovered it).
+- `swclock-offset-boot`/`-shutdown` installed (the PMIC RTC is read-only; the clock started in 1970).
+- `mojito-wifi` now restarts `iio-sensor-proxy` once the sensor PD is served (it did not start by itself; this line is not yet boot-tested).
+- Open: the modem appears to ModemManager only ~30 s after boot (software starts at ~10 s).
+
 ### Volume-up and vibration work (2026-11-27, verified by hand; phone boot_b = r27 Image + `r27/boot_b-r27-keys.img` DTB)
 - Volume-up is PM6150L (SID 4) GPIO 2; the DTS pointed at the PM6150's GPIO 2.
 - Vibrator: stock "lct-pwm-vibrator" = PM6150L LPG channel at 0xbc00 (pwm index 3, 50 us) out of PM6150L GPIO 6, enable TLMM 112;
