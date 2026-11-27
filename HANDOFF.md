@@ -26,6 +26,7 @@ Item 1 VERIFIED: right channel heard from the bottom speaker; codec 3008=c3 3408
 (It first seemed quiet in the Settings test.) UCM now uses the stock speaker levels (`RX_RX0` 84, `RX_RX2` 77,
 `EAR_PA Volume` 6 = -3 dB; headphones stay at 72), confirmed good by ear while raising the volume. There is no speaker
 protection processing: lower these if distortion or heating shows up.
+Item 2 VERIFIED: screen off looks right (no bars).
 
 1. Patch 0019: `RX HPH Mode` item names fixed; UCM selects `CLS_AB` by name (older kernels would pick another mode).
    Check: speaker test in Phosh (both sides).
