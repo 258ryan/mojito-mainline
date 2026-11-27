@@ -5,6 +5,32 @@ State as of 2026-11-27 (Wi-Fi work 2026-11-26/27).
 
 ## START HERE (2026-11-27, end of the long session): where things stand
 
+### Update, later still on 2026-11-27: MICROPHONE WORKS (main mic, AMIC1)
+Cause of the exact zeros: the capture link used `<&swr_tx 0>`; the TX controller has `dout-ports = 1`, so DAI 0 is playback-only, the
+capture stream never allocated a master port (all 0x11xx-0x14xx port registers zero). Fix: `<&swr_tx 1>` (master port 2 now shows
+0x1224 = 0x01000103). Phone boot_b = r27 Image + new DTB (`r27/boot_b-r27-mic.img`); the package is pkgrel=28 with the regenerated
+patch 0001, NOT BUILT. Voice is audible: UCM default `ADC1 Volume` 12 (stock) is faint, 20 is louder with more hiss; not decided,
+UCM unchanged. Quiet-room test still needed: noise centred 4-8 kHz (peaks ~7.2 kHz), scales with ADC gain, unchanged with both
+speaker amps off; the user was in a loudish room. Second mic untested: DT lacks `qcom,tx-channel-mapping` (stock: ADC2 = master port
+2 channel mask 0x2), and 7.4-rc4 qcom.c takes the slave channel mask, so ADC2 may need driver work.
+
+### Update, later on 2026-11-27: BOTH SPEAKERS WORK (kernel pkgrel=27, build #28 on slot B)
+Confirmed by ear in Phosh: left = earpiece (top, amp 0x5b, EAR path), right = main speaker (bottom, amp 0x58, AUX path); music OK.
+The earlier "speaker works" below was only the earpiece. What the main speaker needed:
+1. Patch 0017 (wcd937x: reference-count the RX clock; the second user took no reference, the first teardown gated clock + bias:
+   `clk already disabled`, 0x3408/0x3008 bit0 cleared during playback) and patch 0018 (lpass-rx-macro: AUX `DLY_Z_EN` was cleared
+   instead of set; stock 0x504 = 0x18). Installed together; which one is strictly required was NOT separated.
+2. UCM `cset "name='RX HPH Mode' 3"` (class AB, as stock). The enum text has an extra `CLS_H_INVALID`, so item 3 reads "CLS_H_LP"
+   but is CLS_AB (writing 0 also maps to AB). On the old kernel this setting alone did not give sound.
+Still open / observed: with only RX1 in use (INT1 or INT2 fed from RX1, nothing on RX0) aplay fails with I/O error (stereo is fine);
+the amps stay powered with the PCM closed; a quiet high-pitched squeal occurred on the OLD kernel with RDAC3_MUX=RX3 and the RX
+clock off; mainline sets AUXPA bit4 (stock does not; harmless as far as tested). Live RDAC3_MUX switching and SoundWire debugfs
+register writes leave the codec regmap cache stale: do not use them to judge a test. Test with Phosh Settings > Sound as the
+control. Notes, scripts, stock ROM mixer/amp files and the r26 rollback image: ~/.claude-work/pmos-mojito/audio-speaker-2026-11-27/
+(`r27/boot_b-r26.rollback.img`; old modules `/lib/modules/7.4.0-rc4-sm6150.old` on the phone). Stock amp profiles
+(`/vendor/firmware/aw87xxx_pid_59_music_1.bin`, `..._5a_music_0.bin` after a 64-byte header) equal the DT tables byte for byte.
+`qbootctl` is still not installed: reboot via fastboot and `set_active b`.
+
 **Working on slot B (mainline 7.4-rc4, kernel package r26, build #27):** everything from the older list below plus
 **Wi-Fi** (auto at boot, ~50 s), **Bluetooth** (WCN3950, after Wi-Fi), **Phosh** (stable again), **sensors** (accelerometer + light via
 the ADSP sensor PD / libssc), **sound card + speaker** (WCD9375 over SoundWire, both AW87xxx amps, UCM, PulseAudio).

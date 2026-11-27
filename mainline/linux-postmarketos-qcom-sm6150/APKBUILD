@@ -3,7 +3,7 @@ maintainer=""
 _flavor="postmarketos-qcom-sm6150"
 pkgname=linux-$_flavor
 pkgver=7.4_rc4
-pkgrel=26
+pkgrel=28
 pkgdesc="Mainline kernel for SM6150 devices"
 arch="aarch64"
 _carch="arm64"
@@ -47,6 +47,8 @@ source="
 	0014-iommu-arm-smmu-qcom-reserve-hyp-owned-context-banks-on-qcs615.patch
 	0015-pinctrl-qcom-add-the-SM6150-LPASS-LPI-pin-controller.patch
 	0016-ASoC-codecs-add-an-AW87xxx-amplifier-driven-by-a-register-sequence.patch
+	0017-ASoC-codecs-wcd937x-count-every-user-of-the-RX-clock.patch
+	0018-ASoC-codecs-lpass-rx-macro-set-the-AUX-DLY_Z-enable-bit.patch
 "
 builddir="$srcdir/linux-${pkgver/_/-}"
 
@@ -86,7 +88,7 @@ package() {
 sha512sums="
 df2d9560c6da42cf3620d7abb6b4070c86165b46c6e686f94c4585fc3b887d30cc38550390b1be2dccdafe226ad60f1e5604c080853c25da618a74d38bb75c28  linux-postmarketos-qcom-sm6150-v7.4-rc4.tar.gz
 7275736736fa28429765c6e580a37f0f1226780972160e2aea3a8810333299a1d2b879333ed777dcc3b8e8a0cbfa8827f40388e101a977787a83150446826c67  config-postmarketos-qcom-sm6150.aarch64
-790bda9916c95b92404f7d6f67e8f4d9906fe81c20fc23ea1d7896a86494c389036b4f83acd13df5285a2ed3382abfdbaf3a21b7a472ba4bc75fdd5408e66259  0001-arm64-dts-qcom-add-xiaomi-mojito.patch
+20d5f4c7c69f4203bee0418e5049b5ec81b21acb21a76c0b6d756f2821d2ea7ffd51160bd33275b42fcb6e7ee55d1b2b4cd7098de11c218d4c6a103510c9ff46  0001-arm64-dts-qcom-add-xiaomi-mojito.patch
 61202bda639a577e543975b72e66be7d0b49b0d2349b100fadfc9500e1c8059ef48b5156fa7b83a7eca41d9b87752d210ae1e0a400a68374b32a4f9446ce5a3e  0002-firmware-qcom-tzmem-do-not-use-the-SHM-bridge-on-sm6150.patch
 278eecc64de52cf3fb75be386f8a6f947e9cf2e6a63a311647d63aa7ae5b4578446630ea381bbd74d52184db2f40342cfaa152d1fbb1dfbf4f30d12e0b5bdd97  0003-interconnect-qcom-qcs615-add-the-ACV-enable-mask.patch
 4a0379e92816d74b57f94d14baecf51dff71b28f05d1f4d01c81bb01cec7745d2973cc9ba542308490c4cecb318d86f227717be341b1e4c8fed7a5480d0dbb07  0004-Input-edt-ft5x06-read-all-10-points-on-the-FT5452.patch
@@ -102,4 +104,6 @@ e83d331928cb14c7e6978710dcf2a1182725c0e835456ce23f99ec9262b9376070141a364fd9fe52
 af7dbecb52df628d56211938a665ef1080e67378efe032b1779a8abcc6d586bd07067e9443b0a729d449d8c2da5c6d561aeb54f41c7adb2c8467d64bcb315f2e  0014-iommu-arm-smmu-qcom-reserve-hyp-owned-context-banks-on-qcs615.patch
 e48f9fa7e681bf297eeedeaae816a28044ce77d9ef47e264b79d60bc75bcbbffea093c588f16e19f98da0e2edf3ce196e5903d592379ba701a384ff621c76fe2  0015-pinctrl-qcom-add-the-SM6150-LPASS-LPI-pin-controller.patch
 5e11104d8f4cfe1f3362083b874e7d2903f417a13f157ea111585e3a9ade48ceed2b66681d7567d8ca7ba0694cd0d1d2af1dae5ca7751e8f2272be524f7eab62  0016-ASoC-codecs-add-an-AW87xxx-amplifier-driven-by-a-register-sequence.patch
+9b6b0670fda6427064a029d632e11972a280628dcde94d92ea4749a841595cdb5f7da59ac3eaf526ab5da2bc3ace80c2af278961defd3c41468a36f51ea11101  0017-ASoC-codecs-wcd937x-count-every-user-of-the-RX-clock.patch
+fe45d9580689468da8a8655aa9377097f512d49e8fa047d8555403b0d6fe146a828e628fe384a80aab9192c3e291795905d0fb5edb99397c4e532aa7bd0e7197  0018-ASoC-codecs-lpass-rx-macro-set-the-AUX-DLY_Z-enable-bit.patch
 "

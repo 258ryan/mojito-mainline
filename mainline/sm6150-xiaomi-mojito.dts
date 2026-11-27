@@ -776,7 +776,9 @@
 			};
 
 			codec {
-				sound-dai = <&wcd9375 1>, <&swr_tx 0>, <&lpass_tx_macro 0>;
+				/* swr_tx has one dout port, so DAI 0 is playback-only; capture DAIs start at 1.
+				 * With DAI 0 no master data port is set up and the mic records zeros. */
+				sound-dai = <&wcd9375 1>, <&swr_tx 1>, <&lpass_tx_macro 0>;
 			};
 		};
 	};

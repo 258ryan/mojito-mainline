@@ -1,0 +1,19 @@
+From: postmarketOS mojito port
+Subject: [PATCH] ASoC: codecs: lpass-rx-macro: set the AUX DLY_Z enable bit
+
+rx_macro_config_classh() passes the value 1 under the BIT(3) mask for
+CDC_RX_RX2_DLY_Z_EN, which clears the bit it means to set. The vendor driver
+sets it (register 0x504 reads 0x18 during stock playback).
+---
+--- a/sound/soc/codecs/lpass-rx-macro.c	2026-11-23 03:57:40.000000000 +0500
++++ b/sound/soc/codecs/lpass-rx-macro.c	2026-11-27 06:59:42.217345677 +0500
+@@ -2389,7 +2389,8 @@
+ 	case INTERP_AUX:
+ 		snd_soc_component_update_bits(component,
+ 				CDC_RX_RXn_RX_PATH_CFG0(rx, 2),
+-				CDC_RX_RX2_DLY_Z_EN_MASK, 1);
++				CDC_RX_RX2_DLY_Z_EN_MASK,
++				CDC_RX_RX2_DLY_Z_EN_MASK);
+ 		snd_soc_component_write_field(component,
+ 				CDC_RX_RXn_RX_PATH_CFG0(rx, 2),
+ 				CDC_RX_RX2_CLSH_EN_MASK, 1);
