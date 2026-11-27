@@ -20,6 +20,9 @@ Older detail (how each thing was found, dead ends, reverse engineering): [`docs/
 | Headphones, second microphone, calls, camera, GPS, NFC, fingerprint | not working or never tried |
 
 ### Added in pkgrel=29 and still to be verified by hand
+Flashed to slot B (build #30) with the matching UCM. Boot checked: Wi-Fi 16 s, Bluetooth 17-19 s, modem connected, sensors,
+sound card, `RX HPH Mode` names correct with value 3 = `CLS_AB`; no modem stall on this boot.
+
 1. Patch 0019: `RX HPH Mode` item names fixed; UCM selects `CLS_AB` by name (older kernels would pick another mode).
    Check: speaker test in Phosh (both sides).
 2. Patch 0005: panel blanked in `disable` (video still running). Check: screen off shows no bars.
