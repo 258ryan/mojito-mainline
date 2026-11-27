@@ -121,12 +121,13 @@ FAT32, flash `u-boot.img` to `boot_b`, remove the hand-copied test files and the
 | Wi-Fi and Bluetooth loaded by script, modules blacklisted | proper ordering in the drivers/services |
 | "No DSP request for 3 s" means the sensor PD is served | a real ready notification |
 | Plain wallpaper (the default JPEG XL one locks up the phone at login) | find why glycin-jxl exhausts memory into a hard lock-up |
-| Greeter PulseAudio `autospawn = no` (device package post-install) | hand the sound card from the greeter to the user session the pmOS way |
 | `aw87xxx-seq` amplifier driver replaying vendor register tables | load the vendor profiles in a mainline Awinic driver |
 | SMMU identity domain (0006), stopping the bootloader timing engine (0007) | upstreamable fixes |
 | hexagonrpcd patch not upstream | send it |
 
-Already removed: `pd_ignore_unused`, discarded sensor-registry writes, log-line readiness guessing, numeric `RX HPH Mode`.
+Already removed: `pd_ignore_unused`, discarded sensor-registry writes, log-line readiness guessing, numeric `RX HPH Mode`,
+greeter PulseAudio `autospawn = no` (not needed: the greeter's PulseAudio exits at login and elogind's uaccess ACLs hand
+`/dev/snd` to the user session; verified with a test sound 2026-11-27).
 
 ## The phone (slot B; slot A / stock kept apart)
 
@@ -137,7 +138,7 @@ Already removed: `pd_ignore_unused`, discarded sensor-registry writes, log-line 
 - Firmware: private package `firmware-xiaomi-mojito-mainline` (repo `258ryan/mojito-firmware`); EFS images are in no repo.
 - `mainline/rootfs/` copied by hand: services `mojito-wifi` and `mojito-sensors` (default runlevel), `modprobe.d`
   blacklist, UCM files, gmobile panel overlay + profile script, glib wallpaper override (then `glib-compile-schemas`),
-  greeter `client.conf` (`autospawn = no`, owned by greetd). The accelerometer udev rule is **not** active on the phone.
+  The accelerometer udev rule is **not** active on the phone (it is in the device package).
 - `mainline/hexagonrpc/` build installed as `/usr/local/bin/hexagonrpcd-mojito`; state in `/var/lib/hexagonrpcd/mojito`.
 - User `user` is in groups `audio video input`. PulseAudio (not PipeWire) drives the sound card.
 
