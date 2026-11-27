@@ -126,7 +126,7 @@ FAT32, flash `u-boot.img` to `boot_b`, remove the hand-copied test files and the
 | hexagonrpcd patch not upstream | send it |
 
 Already removed: `pd_ignore_unused`, discarded sensor-registry writes, log-line readiness guessing, numeric `RX HPH Mode`,
-greeter PulseAudio `autospawn = no` (not needed: the greeter's PulseAudio exits at login and elogind's uaccess ACLs hand
+hand-added `audio video input` user groups (same mechanism), greeter PulseAudio `autospawn = no` (not needed: the greeter's PulseAudio exits at login and elogind's uaccess ACLs hand
 `/dev/snd` to the user session; verified with a test sound 2026-11-27).
 
 ## The phone (slot B; slot A / stock kept apart)
@@ -140,7 +140,8 @@ greeter PulseAudio `autospawn = no` (not needed: the greeter's PulseAudio exits 
   blacklist, UCM files, gmobile panel overlay + profile script, glib wallpaper override (then `glib-compile-schemas`),
   The accelerometer udev rule is **not** active on the phone (it is in the device package).
 - `mainline/hexagonrpc/` build installed as `/usr/local/bin/hexagonrpcd-mojito`; state in `/var/lib/hexagonrpcd/mojito`.
-- User `user` is in groups `audio video input`. PulseAudio (not PipeWire) drives the sound card.
+- User `user` has the pmOS default groups only (`audio video input` removed 2026-11-27: elogind's uaccess ACLs give the
+  active session sound, display and input; verified Phosh, touch and a test sound). PulseAudio (not PipeWire) drives the card.
 
 ## Workflow
 
