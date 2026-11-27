@@ -44,12 +44,14 @@ Item 3 VERIFIED (one run): 20 s s2idle with RTC wake: screen back, ADSP and mode
   registry directory is not in git, so `hexagonrpcd-mojito` failed and with it Wi-Fi, Bluetooth and sensors (r4).
 - `qbootctl` could not read the slot under U-Boot: `androidboot.slot_suffix=_b` on the kernel command line (WORKAROUND:
   assumes U-Boot in boot_b; device r6). OpenRC still shows the one-shot service as "crashed".
-- **Calls, unfinished** (kernel r42 patches 0022-0031, `q6voiced`, UCM "Voice Call"): the MICROPHONE reaches the other side;
-  RECEIVED audio is silent. Verified: routes, codec, amplifiers and both AFE ports are powered during a call, the earpiece
-  route plays media, and the ADSP (CVD 2.4) accepts every command. Needed for the microphone: TX topology NONE (the
-  processing topologies pass nothing without calibration, so no echo cancellation). Tried for RX without sound: RX topology
-  default and none, 1 and 2 channels, earlier and later start. The volume step command is rejected (no calibration). Next
-  ideas: unmute the vocproc (CVP) itself, load the vendor calibration, or record what stock sends during a call.
+- **Calls, half working** (kernel r42 patches 0022-0031, `q6voiced`, UCM "Voice Call"): the MICROPHONE reaches the other side
+  with the vendor's TX topology SM_ECNS_V2 (0x10F89), one channel (the older 0x10F71 passes nothing on this firmware, CVD
+  2.4; echo cancellation not yet judged by ear). RECEIVED audio is silent. Matching already: AFE ports 0xB030 / 0xB037 at
+  48 kHz, RX topology default 0x10F77 (the vendor's fallback without calibration), routes, codec and amplifiers powered, the
+  earpiece route plays media, every command accepted (the RX volume step is rejected). Tried without sound: RX default and
+  none, 1/2 RX channels, stream and vocproc unmute, early and late start, the SDM845 driver's sequence by parameters.
+  Next: decode the stock calibration database (vendor /etc/acdbdata) for the topology IDs and tables, else record what
+  stock sends during a call.
   Module-only builds: no MODVERSIONS or signing, so `make M=sound/soc/qcom/qdsp6` in a patched tree with the package config.
 - **Modem startup stall still happens** on r40/r41 (`packet before probe, dropped`, then the watchdog at ~50 s; it
   recovers). Patch 0021 is therefore incomplete.
