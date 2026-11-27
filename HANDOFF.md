@@ -43,9 +43,19 @@ Item 3 VERIFIED (one run): 20 s s2idle with RTC wake: screen back, ADSP and mode
    check: audio after resume, long sleeps, sleep started by Phosh/gsd-power (battery, 900 s idle; goes through elogind),
    wake by power button, incoming calls/data, and idle power draw. Only `s2idle` exists. Test:
    `echo +20 > /sys/class/rtc/rtc0/wakealarm; echo freeze > /sys/power/state` (run detached; write logs to disk).
-2. **Modem stalls at boot, sometimes** (`DOG detects stalled initialization` ~48 s). Seen on several boots, with stock and
-   patched hexagonrpcd. `mojito-wifi` had not started hexagonrpcd yet (it waits for QMI 69, which had not appeared). It
-   usually recovers; once it crashed every ~40 s until a clean reboot. Cause unknown: compare good and bad boot timelines.
+2. **Modem stalls at boot, ~40% of boots** (`dog_hal_common.c:173: DOG detects stalled initialization` ~40 s after start,
+   then it restarts and works; Wi-Fi/data come ~40 s late). Findings 2026-11-27 (12 recorded boots, all test changes removed):
+   - In a stall the modem registers only QMI 43 (SSCTL) and 66 (servreg notifier), then nothing until the watchdog; in good
+     boots 15/51/21(EFS)/22/23/24/36... follow ~0.2 s later.
+   - It never sends rmtfs a request in the stalled run (no `open /boot/modem_fs1`); `rmtfs -v` + `tqftpserv -d` logs.
+   - Not rmtfs starting the modem too early: with rmtfs without `-s` and the modem started 2 s after rmtfs' service was
+     visible, a boot still stalled. rmtfs, tqftpserv, pd-mapper (64/1/1), IPA (49/1/1), TFTP (4096) are registered first.
+   - With `trace_event=qrtr:* trace_buf_size=4M` on the command line: 0 stalls in 5 boots (vs 3 in 7 without): a timing race
+     in the first second of the QRTR handshake is likely (tracing slows the name service). Good boot sequence: modem
+     `hello` x2 -> ns advertises 14/64/49/4096 (twice) -> modem adds 43, 66 -> ~0.2 s later the rest. Next: catch a stall
+     with lighter tracing (only `qrtr_ns_message`, or a ring of timestamps), compare with the good sequence above.
+   - Not yet tested: EFS writes (`rmtfs_avoid_writing="true"` is the pmOS default here: the modem's EFS writes are dropped).
+   Logs on the phone: /var/tmp/modemboot-logs/ (private: contain no identifiers, but keep off the public repo).
 3. PC-port charging (add module parameters to the SMB5 driver to try register settings live; a bad setting can suspend USBIN
    until a replug). Stock leaves `0x1366 = 0x03` on an SDP; the driver writes `0x02`.
 4. Modem appears to ModemManager only ~30 s after boot (OpenRC also lists `modemmanager` as failed although it runs).
