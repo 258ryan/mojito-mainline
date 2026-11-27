@@ -123,7 +123,10 @@ firmware partitions and must not be published as is.
   ultrawide Sony IMX355 (driver has `sony,imx355` OF match + binding: DT nodes only), front OmniVision OV13B10 (driver is
   ACPI-only: needs OF match + clock), macro GC02M1 / depth GC02M1B or OV02B1B (no drivers). First target: ultrawide via DT
   (CCI bus, regulators, MCLK, reset GPIO, CSI-PHY lanes from the stock DT), then libcamera (CAMSS + software ISP).
-  IMX582 is NOT in 7.4-rc4 (no imx582.c/imx586.c; only imx576.c), despite claims otherwise. Macro/depth: the armbian
+  IMX582 is NOT in 7.4-rc4 (no imx582.c/imx586.c; only imx576.c), but Luca Weiss (Fairphone, FP4 uses IMX582) wrote a
+  mainline-style driver: github.com/danascape/linux-billie branch sm6350-6.19.y, drivers/media/i2c/imx582.c (1201 lines,
+  CCI regmap, DT, regulators, inclk, reset GPIO, 4-lane CSI-2, one 4000x2256 mode, chip ID 0x0582 at 0x0016). Use it as
+  a kernel patch (credit Luca Weiss) + mojito DT wiring. Macro/depth: the armbian
   Rockchip kernel (github.com/armbian/linux-rockchip, branch rk-6.1-rkr7.2) has gc02m0.c (chip ID 0x02e0, likely the
   GC02M1 base; confirm the ID from the stock module or over I2C) and ov02b10.c (0x2B, for the OV02B1B depth module);
   both use Rockchip's rkmodule interface (~20 uses) and need porting to plain V4L2 + DT bindings. Lowest priority.
