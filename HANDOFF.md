@@ -100,13 +100,11 @@ Vendor sources used: Neternels/android_kernel_xiaomi_sunny (techpack wcd937x, aw
 
 ## Going public: status (2026-11-27)
 
-- Firmware: public candidate built ONLY from the official ROM, local repo `~/.claude-work/mojito-firmware-public` (no remote):
-  `tools/build-tree.sh <NON-HLOS.bin BTFM.bin dspso.bin vendor_a.img dir> <out>` -> 455 files, 112 MB, empty sensor registry;
-  `package/APKBUILD` = firmware-xiaomi-mojito-mainline 2. NOT yet tested on the phone (user will test later; the phone still
-  runs the private 1-r0). Hosting (public repo of blobs vs. extraction from the ROM) is the user's decision.
-- mojito-device: ready to publish content-wise (Finder packages moved to the private local repo `~/.claude-work/finder-packages`,
-  generic sync script, public README; full history scanned: no private data). Its history still contains the Finder recipes
-  (commit b210b17, removed in 431564f): drop that commit before publishing if they must never be public (needs a force-push).
+- Public on GitHub: `258ryan/mojito-mainline`, `258ryan/mojito-device`, `258ryan/firmware-xiaomi-mojito`.
+- Firmware: built ONLY from the official ROM (455 files, empty sensor registry), tagged v2, checksum pinned in the package.
+  NOT yet booted on the phone (user will test later; the phone still runs the private 1-r0).
+- Finder packages live in the private local repo `~/.claude-work/finder-packages`; their recipes remain in mojito-device's
+  history (build steps and private repo names only), left as they are.
 - Fresh install: the initramfs resizes the nested GPT correctly (tested: a 4K-sector image grown into a larger device shows
   the free space to `parted -s print free`). The 917 MB root of the current phone came from the downstream initramfs (no
   rootfs_image_sector_size). To prove on a real from-scratch `pmbootstrap install`.

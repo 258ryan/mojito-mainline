@@ -6,17 +6,19 @@ Qualcomm SM6150 (Snapdragon 678), Adreno 612.
 
 Linux 7.4-rc4 with `sm6150-xiaomi-mojito.dts` on top of mainline's `talos.dtsi`, postmarketOS (OpenRC) and Phosh.
 
-| Works | Not yet |
+| Works | Not yet, or unreliable |
 |---|---|
 | Display with brightness and smooth dimming, touch, GPU, Phosh | Calls |
-| Wi-Fi, Bluetooth, mobile data | Headphones, second microphone |
-| Both speakers, main microphone | Camera, GPS, NFC, fingerprint |
-| Accelerometer, light sensor, compass | Charging from a PC USB port |
-| Power and volume keys, vibrator | Full CPU top speed |
+| Wi-Fi, Bluetooth (setup sometimes fails), mobile data | Headphones, second microphone |
+| Both speakers, main microphone (some hiss) | Camera, GPS, NFC, fingerprint |
+| Accelerometer, light sensor, compass, auto-rotation | Charging from a PC USB port |
+| Full CPU speed with thermal throttling | |
+| Power and volume keys, vibrator | |
 | Wall charging, battery percentage | |
 | Suspend (only briefly tested) | |
 
-It is a development port, not an installable image: there is no device package yet, and several pieces are set up by hand.
+It is a development port. The device, kernel, firmware and U-Boot packages exist, but a clean install from them has not been
+tested yet (see "Build and install" below).
 
 ## Downstream (`downstream/`)
 
@@ -64,12 +66,14 @@ git clone https://github.com/258ryan/firmware-xiaomi-mojito
 pmbootstrap init                      # vendor xiaomi, device mojito, UI phosh (any init once, to get pmaports)
 mojito-device/tools/sync-to-pmaports.sh "$(pmbootstrap config aports)" mojito-mainline firmware-xiaomi-mojito/package
 pmbootstrap init                      # again: now picks up the mainline device-xiaomi-mojito
-pmbootstrap install                   # add --add u-boot-xiaomi-mojito to have U-Boot in the image
+pmbootstrap install --add u-boot-xiaomi-mojito
 
-# phone in Xiaomi fastboot (Power + Volume down):
-pmbootstrap export                    # U-Boot image: build u-boot-xiaomi-mojito, then take u-boot.img from the apk
+# take the U-Boot image out of the installed system
+cp "$(pmbootstrap config work)/chroot_rootfs_xiaomi-mojito/usr/share/u-boot/xiaomi-mojito/u-boot.img" .
+
+# phone in Xiaomi fastboot (Power + Volume down). This replaces boot_b and ERASES userdata:
 fastboot erase dtbo_b
-fastboot flash boot_b u-boot.img      # /usr/share/u-boot/xiaomi-mojito/u-boot.img
+fastboot flash boot_b u-boot.img
 fastboot set_active b
 pmbootstrap flasher flash_rootfs      # the pmOS disk image into userdata (U-Boot finds it there)
 fastboot reboot
