@@ -123,6 +123,10 @@ firmware partitions and must not be published as is.
   ultrawide Sony IMX355 (driver has `sony,imx355` OF match + binding: DT nodes only), front OmniVision OV13B10 (driver is
   ACPI-only: needs OF match + clock), macro GC02M1 / depth GC02M1B or OV02B1B (no drivers). First target: ultrawide via DT
   (CCI bus, regulators, MCLK, reset GPIO, CSI-PHY lanes from the stock DT), then libcamera (CAMSS + software ISP).
+  IMX582 is NOT in 7.4-rc4 (no imx582.c/imx586.c; only imx576.c), despite claims otherwise. Macro/depth: the armbian
+  Rockchip kernel (github.com/armbian/linux-rockchip, branch rk-6.1-rkr7.2) has gc02m0.c (chip ID 0x02e0, likely the
+  GC02M1 base; confirm the ID from the stock module or over I2C) and ov02b10.c (0x2B, for the OV02B1B depth module);
+  both use Rockchip's rkmodule interface (~20 uses) and need porting to plain V4L2 + DT bindings. Lowest priority.
 - GPS: modem QMI location service 16 is up; ModemManager offers gps-raw/nmea/agps, but enabling fails:
   "Couldn't start GPS engine: QMI protocol error (46): GeneralError". Next: QMI LOC engine lock / NV settings.
 - NFC: stock DT has `st,st21nfc` at i2c a84000 (0x08) with rpmh clock 4 (LN_BB_CLK3?); mainline ST NCI drivers to check.
