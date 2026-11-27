@@ -20,7 +20,8 @@ and service start times of good and bad boots.
 ### Workarounds: progress
 - File server: DONE. `mainline/hexagonrpc/` now stores the sensor registry (`-w`) and reports idle (`-i`); the discard version and
   the log-line guess in `mojito-wifi` are gone. Wi-Fi ~18 s with a saved registry (one boot, hand-set config; the final default
-  configuration is installed on the phone). Still a heuristic underneath: "idle for 3 s" stands for "sensor PD served".
+  configuration verified on a plain reboot with no conf.d overrides: idle 14 s, wlan 18 s, BT 19-20 s, modem connected,
+  sensors read, no errors). Still a heuristic underneath: "idle for 3 s" stands for "sensor PD served".
 - RX HPH Mode: patch 0019 fixes the enum names, UCM now sets `CLS_AB` by name (pkgrel=29, NOT BUILT; install kernel and UCM
   together: on older kernels the name selects the wrong mode, so keep the numeric UCM until r29 is on the phone).
 - `clk_ignore_unused pd_ignore_unused`: audit started. Clocks hardware-on with enable count 0 include display (dsi0pll*,
