@@ -23,7 +23,9 @@ Older detail (how each thing was found, dead ends, reverse engineering): [`docs/
 Flashed to slot B (build #30) with the matching UCM. Boot checked: Wi-Fi 16 s, Bluetooth 17-19 s, modem connected, sensors,
 sound card, `RX HPH Mode` names correct with value 3 = `CLS_AB`; no modem stall on this boot.
 Item 1 VERIFIED: right channel heard from the bottom speaker; codec 3008=c3 3408=07, macro 0x504=18, amp registers as stock.
-(It first seemed quiet or silent in the Settings test; UCM caps RX digital volume at 72, stock speaker uses 77.)
+(It first seemed quiet in the Settings test.) UCM now uses the stock speaker levels (`RX_RX0` 84, `RX_RX2` 77,
+`EAR_PA Volume` 6 = -3 dB; headphones stay at 72), confirmed good by ear while raising the volume. There is no speaker
+protection processing: lower these if distortion or heating shows up.
 
 1. Patch 0019: `RX HPH Mode` item names fixed; UCM selects `CLS_AB` by name (older kernels would pick another mode).
    Check: speaker test in Phosh (both sides).
