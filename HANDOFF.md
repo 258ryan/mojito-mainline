@@ -41,6 +41,16 @@ Lessons (each cost a freeze/boot):
   stock r0 the same Phosh boot (plymouth still running) is stable, Wi-Fi/BT/LTE up. The cutout data now comes from
   `rootfs/usr/share/gmobile-mojito/display-panels/xiaomi,mojito.json` via `G_RESOURCE_OVERLAYS` (`rootfs/etc/profile.d/gmobile-mojito.sh`);
   do not install the r1 build. greetd is enabled again.
+- **The real cause of the Phosh freezes: the default GNOME wallpaper** (`/usr/share/backgrounds/gnome/curvaturingster-{l,d}.jxl`).
+  At every login `glycin-jxl` (JPEG XL decoder) grows to ~2.1 GB within 3 s, MemAvailable falls to ~400 MB, then one CPU hard-locks
+  (RCU stall, no NMI response) and the phone freezes. Captured with a per-second /proc/*/status VmRSS logger. The gmobile r1 and
+  mount-matrix "causes" were coincidence. Fix: `rootfs/usr/share/glib-2.0/schemas/99-mojito-wallpaper.gschema.override` (plain color;
+  run `glib-compile-schemas`). A phone-sized JPEG would also work; do not use the JXL. gmobile r1 is therefore probably fine too.
+- Rotation: upright reported `bottom-up` without a mount matrix; `rootfs/usr/lib/udev/rules.d/81-libssc-xiaomi-mojito.rules`
+  (Y,Z inverted) was written and tested once, then parked as `/root/81-libssc-xiaomi-mojito.rules.off` on the phone during the freeze
+  hunt. It was not the cause: re-test and re-enable.
+- Repeated forced resets mark slot B unbootable (`fastboot getvar slot-unbootable:b` = yes, retry 0): `fastboot set_active b`.
+  Permanent fix: install `qbootctl` + `qbootctl-openrc` (marks the boot successful; the install hit DNS errors, not done yet).
 - **Sensors now work as a side effect:** with the sensor PD served, iio-sensor-proxy (libssc) reports an accelerometer and ambient
   light; Phosh auto-rotates. Orientation test (upright/upside-down/left/right) matched without a mount matrix.
 - busybox `grep` has no `--line-buffered`; a `dmesg -w | grep ...` capture silently records nothing. Stream raw `dmesg -w` instead.

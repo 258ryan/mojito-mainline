@@ -1,0 +1,12 @@
+# Redmi Note 10 (mojito): the default JPEG XL wallpaper makes glycin-jxl use >2 GB at login and the phone locks up.
+[org.gnome.desktop.background]
+picture-uri=''
+picture-uri-dark=''
+picture-options='none'
+primary-color='#1e1e2e'
+color-shading-type='solid'
+
+[org.gnome.desktop.screensaver]
+picture-uri=''
+picture-options='none'
+primary-color='#1e1e2e'
