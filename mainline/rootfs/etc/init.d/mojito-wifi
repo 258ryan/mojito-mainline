@@ -5,18 +5,20 @@
 # served its files by hexagonrpcd. Only the secure node works for that here: with /dev/fastrpc-adsp
 # (qcom,non-secure-domain) the sensor PD gets the same file traffic but the capability still fails, and
 # the stock hexagonrpcd-adsp-sensorspd service (fastrpc user) cannot open the 0600 root-owned secure node.
-# So this service runs hexagonrpcd as root on /dev/fastrpc-adsp-secure, waits until the sensor PD's file
-# traffic has started and settled (~40 s), then loads ath10k_snoc once. If the capability is still
+# So this service runs hexagonrpcd as root on /dev/fastrpc-adsp-secure, waits for the server's idle marker
+# (~15 s after boot), then loads ath10k_snoc once. If the capability is still
 # rejected, ath10k_snoc is unloaded again instead of leaving the firmware in an endless crash/restart loop.
 # ath10k_snoc and hci_uart are blacklisted for udev autoload (/etc/modprobe.d/ath10k-mojito.conf).
 
 name="mojito Wi-Fi (sensor PD + ath10k)"
 supervisor=supervise-daemon
-# Prefer the patched build (mainline/hexagonrpc/): it cuts the wait below from ~35 s to a few seconds.
-# /etc/conf.d/mojito-wifi can set hexagonrpcd_bin to force one or the other.
-[ -x /usr/local/bin/hexagonrpcd-mojito ] && : "${hexagonrpcd_bin:=/usr/local/bin/hexagonrpcd-mojito}"
-command=${hexagonrpcd_bin:-/usr/bin/hexagonrpcd}
-command_args="-f /dev/fastrpc-adsp-secure -d adsp -s -R /usr/share/qcom/sm6150/Xiaomi/mojito"
+# The patched build from mainline/hexagonrpc/: the sensor PD writes its registry to $STATE (seeded once from the
+# firmware package; delete it to start over) and the server creates $IDLE when the PD stops asking for files.
+command=/usr/local/bin/hexagonrpcd-mojito
+FWDIR=/usr/share/qcom/sm6150/Xiaomi/mojito
+STATE=/var/lib/hexagonrpcd/mojito
+IDLE=/run/hexagonrpcd/idle
+command_args="-f /dev/fastrpc-adsp-secure -d adsp -s -R $FWDIR -w $STATE -i $IDLE"
 LOG=/run/hexagonrpcd/sensorspd.log
 output_log=$LOG
 error_log=$LOG
@@ -29,7 +31,13 @@ depend() {
 start_pre() {
 	checkpath -d -m 0755 /run/hexagonrpcd
 	: > $LOG
-	rm -f /run/hexagonrpcd/ready
+	if [ ! -d "$STATE/registry" ]; then
+		rm -rf "$STATE/registry.new"
+		mkdir -p "$STATE" &&
+		cp -a "$FWDIR/sensors/registry" "$STATE/registry.new" &&
+		mv "$STATE/registry.new" "$STATE/registry" ||
+			{ eerror "could not seed the sensor registry in $STATE"; return 1; }
+	fi
 	# The sensor PD must be attached AFTER the modem's WLAN firmware service (QMI 69) is registered:
 	# every run that started hexagonrpcd earlier got 119 for the rest of the boot.
 	for i in $(seq 1 120); do
@@ -40,18 +48,15 @@ start_pre() {
 }
 
 start_post() {
-	( # wait for the sensor PD: traffic must start (>= 100 lines; a full pass is ~1600), then 3 s quiet
-	  last=-1; quiet=0
+	( # wait until the server reports the sensor PD idle (it has been served its files)
 	  for i in $(seq 1 360); do
-		n=$(wc -l < $LOG 2>/dev/null || echo 0)
-		[ "$n" = "$last" ] && quiet=$((quiet+1)) || quiet=0; last=$n
-		[ "$n" -ge "${wifi_min_lines:-100}" ] && [ $quiet -ge "${wifi_quiet_polls:-6}" ] && break
+		[ -e $IDLE ] && break
 		sleep 0.5
 	  done
 	  touch /run/hexagonrpcd/ready		# the sensor PD is served (mojito-sensors waits for this)
 	  lsmod | grep -q '^ath10k_snoc ' && exit 0
 	  before=$(dmesg | grep -c 'capability req rejected')
-	  logger -t mojito-wifi "sensor PD served ($n lines), loading ath10k_snoc"
+	  logger -t mojito-wifi "sensor PD served, loading ath10k_snoc"
 	  modprobe ath10k_snoc
 	  for i in $(seq 1 60); do
 		if [ -e /sys/class/net/wlan0 ]; then
