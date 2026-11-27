@@ -16,7 +16,7 @@ diff -urN a/arch/arm64/boot/dts/qcom/Makefile b/arch/arm64/boot/dts/qcom/Makefil
  dtb-$(CONFIG_ARCH_QCOM)	+= sm6350-sony-xperia-lena-pdx213.dtb
 --- a/arch/arm64/boot/dts/qcom/sm6150-xiaomi-mojito.dts	1970-01-01 05:00:00.000000000 +0500
 +++ b/arch/arm64/boot/dts/qcom/sm6150-xiaomi-mojito.dts	2026-11-27 07:00:00.000000000 +0500
-@@ -0,0 +1,1499 @@
+@@ -0,0 +1,1782 @@
 +// SPDX-License-Identifier: BSD-3-Clause
 +/*
 + * Xiaomi Redmi Note 10 (mojito / sunny), SM6150 "Talos".
@@ -1514,5 +1514,288 @@ diff -urN a/arch/arm64/boot/dts/qcom/Makefile b/arch/arm64/boot/dts/qcom/Makefil
 +		 * autoload and loaded by the mojito-wifi service after that (see HANDOFF.md).
 +		 */
 +		status = "okay";
++	};
++};
++
++/*
++ * CPU speed steps. The cpufreq hardware table of this SM6150 offers 1017.6 and 1708.8 MHz (little)
++ * and 2016, 2112 and 2208 MHz (big), which talos.dtsi (written for QCS615) lacks: qcom-cpufreq-hw
++ * then rejects them ("Voltage update failed") and the CPUs stop at 1593.6 / 1900.8 MHz. Voltages
++ * come from the hardware table; the bandwidth votes copy the nearest existing step.
++ */
++&cpu0_opp_table {
++	opp-1017600000 {
++		opp-hz = /bits/ 64 <1017600000>;
++		opp-peak-kBps = <(451000 * 4) (806400 * 16)>;
++	};
++
++	opp-1708800000 {
++		opp-hz = /bits/ 64 <1708800000>;
++		opp-peak-kBps = <(1017000 * 4) (1363200 * 16)>;
++	};
++};
++
++&cpu6_opp_table {
++	opp-2016000000 {
++		opp-hz = /bits/ 64 <2016000000>;
++		opp-peak-kBps = <(1555000 * 4) (1363200 * 16)>;
++	};
++
++	opp-2112000000 {
++		opp-hz = /bits/ 64 <2112000000>;
++		opp-peak-kBps = <(1555000 * 4) (1363200 * 16)>;
++	};
++
++	opp-2208000000 {
++		opp-hz = /bits/ 64 <2208000000>;
++		opp-peak-kBps = <(1555000 * 4) (1363200 * 16)>;
++	};
++
++};
++
++/*
++ * CPU thermal throttling. talos.dtsi gives the CPU zones only a critical trip, so nothing slows
++ * the CPUs before the 115 C shutdown. Passive trips as on sc7180; the zone-to-core mapping is the
++ * stock one (cpuss-* sit in the little cluster, cpu-1-0/1 on cpu6, cpu-1-2/3 on cpu7). There is
++ * one cooling device per cpufreq policy, so the zones map to cpu0 or cpu6.
++ */
++
++&{/thermal-zones/cpuss-0-thermal} {
++	polling-delay-passive = <250>;
++
++	trips {
++		cpuss0_alert0: trip-point0 {
++			temperature = <90000>;
++			hysteresis = <2000>;
++			type = "passive";
++		};
++
++		cpuss0_alert1: trip-point1 {
++			temperature = <95000>;
++			hysteresis = <2000>;
++			type = "passive";
++		};
++	};
++
++	cooling-maps {
++		map0 {
++			trip = <&cpuss0_alert0>;
++			cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++		};
++
++		map1 {
++			trip = <&cpuss0_alert1>;
++			cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++		};
++	};
++};
++
++&{/thermal-zones/cpuss-1-thermal} {
++	polling-delay-passive = <250>;
++
++	trips {
++		cpuss1_alert0: trip-point0 {
++			temperature = <90000>;
++			hysteresis = <2000>;
++			type = "passive";
++		};
++
++		cpuss1_alert1: trip-point1 {
++			temperature = <95000>;
++			hysteresis = <2000>;
++			type = "passive";
++		};
++	};
++
++	cooling-maps {
++		map0 {
++			trip = <&cpuss1_alert0>;
++			cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++		};
++
++		map1 {
++			trip = <&cpuss1_alert1>;
++			cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++		};
++	};
++};
++
++&{/thermal-zones/cpuss-2-thermal} {
++	polling-delay-passive = <250>;
++
++	trips {
++		cpuss2_alert0: trip-point0 {
++			temperature = <90000>;
++			hysteresis = <2000>;
++			type = "passive";
++		};
++
++		cpuss2_alert1: trip-point1 {
++			temperature = <95000>;
++			hysteresis = <2000>;
++			type = "passive";
++		};
++	};
++
++	cooling-maps {
++		map0 {
++			trip = <&cpuss2_alert0>;
++			cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++		};
++
++		map1 {
++			trip = <&cpuss2_alert1>;
++			cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++		};
++	};
++};
++
++&{/thermal-zones/cpuss-3-thermal} {
++	polling-delay-passive = <250>;
++
++	trips {
++		cpuss3_alert0: trip-point0 {
++			temperature = <90000>;
++			hysteresis = <2000>;
++			type = "passive";
++		};
++
++		cpuss3_alert1: trip-point1 {
++			temperature = <95000>;
++			hysteresis = <2000>;
++			type = "passive";
++		};
++	};
++
++	cooling-maps {
++		map0 {
++			trip = <&cpuss3_alert0>;
++			cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++		};
++
++		map1 {
++			trip = <&cpuss3_alert1>;
++			cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++		};
++	};
++};
++
++&{/thermal-zones/cpu-1-0-thermal} {
++	polling-delay-passive = <250>;
++
++	trips {
++		cpu10_alert0: trip-point0 {
++			temperature = <90000>;
++			hysteresis = <2000>;
++			type = "passive";
++		};
++
++		cpu10_alert1: trip-point1 {
++			temperature = <95000>;
++			hysteresis = <2000>;
++			type = "passive";
++		};
++	};
++
++	cooling-maps {
++		map0 {
++			trip = <&cpu10_alert0>;
++			cooling-device = <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++		};
++
++		map1 {
++			trip = <&cpu10_alert1>;
++			cooling-device = <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++		};
++	};
++};
++
++&{/thermal-zones/cpu-1-1-thermal} {
++	polling-delay-passive = <250>;
++
++	trips {
++		cpu11_alert0: trip-point0 {
++			temperature = <90000>;
++			hysteresis = <2000>;
++			type = "passive";
++		};
++
++		cpu11_alert1: trip-point1 {
++			temperature = <95000>;
++			hysteresis = <2000>;
++			type = "passive";
++		};
++	};
++
++	cooling-maps {
++		map0 {
++			trip = <&cpu11_alert0>;
++			cooling-device = <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++		};
++
++		map1 {
++			trip = <&cpu11_alert1>;
++			cooling-device = <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++		};
++	};
++};
++
++&{/thermal-zones/cpu-1-2-thermal} {
++	polling-delay-passive = <250>;
++
++	trips {
++		cpu12_alert0: trip-point0 {
++			temperature = <90000>;
++			hysteresis = <2000>;
++			type = "passive";
++		};
++
++		cpu12_alert1: trip-point1 {
++			temperature = <95000>;
++			hysteresis = <2000>;
++			type = "passive";
++		};
++	};
++
++	cooling-maps {
++		map0 {
++			trip = <&cpu12_alert0>;
++			cooling-device = <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++		};
++
++		map1 {
++			trip = <&cpu12_alert1>;
++			cooling-device = <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++		};
++	};
++};
++
++&{/thermal-zones/cpu-1-3-thermal} {
++	polling-delay-passive = <250>;
++
++	trips {
++		cpu13_alert0: trip-point0 {
++			temperature = <90000>;
++			hysteresis = <2000>;
++			type = "passive";
++		};
++
++		cpu13_alert1: trip-point1 {
++			temperature = <95000>;
++			hysteresis = <2000>;
++			type = "passive";
++		};
++	};
++
++	cooling-maps {
++		map0 {
++			trip = <&cpu13_alert0>;
++			cooling-device = <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++		};
++
++		map1 {
++			trip = <&cpu13_alert1>;
++			cooling-device = <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++		};
 +	};
 +};

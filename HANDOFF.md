@@ -1,6 +1,6 @@
 # Handoff: postmarketOS on the Redmi Note 10 (mojito / sunny)
 
-State as of 2026-11-27, mainline Linux 7.4-rc4, kernel package `pkgrel=29`. Read this file first.
+State as of 2026-11-27, mainline Linux 7.4-rc4, kernel package `pkgrel=30` (slot B runs r29's kernel with r30's DTB). Read this file first.
 Older detail (how each thing was found, dead ends, reverse engineering): [`docs/HANDOFF-history.md`](docs/HANDOFF-history.md).
 
 ## Status
@@ -10,6 +10,7 @@ Older detail (how each thing was found, dead ends, reverse engineering): [`docs/
 | Boot, display (DPU/DSI/panel), brightness with smooth dimming, touch, GPU, Phosh | works |
 | Wi-Fi (~18 s after boot), Bluetooth (~19 s) | works |
 | Mobile data (LTE) | works; calls not set up |
+| CPU at full speed (1.71 / 2.21 GHz) with thermal throttling at 90 / 95 C | works (DTS, pkgrel=30) |
 | Accelerometer, light sensor, compass | works |
 | Speakers: left = earpiece (top), right = main speaker (bottom) | works |
 | Microphone (main, AMIC1) | works; hiss around 7 kHz, faint at the stock gain |
@@ -44,23 +45,24 @@ Item 3 VERIFIED (one run): 20 s s2idle with RTC wake: screen back, ADSP and mode
 2. **Modem stalls at boot, sometimes** (`DOG detects stalled initialization` ~48 s). Seen on several boots, with stock and
    patched hexagonrpcd. `mojito-wifi` had not started hexagonrpcd yet (it waits for QMI 69, which had not appeared). It
    usually recovers; once it crashed every ~40 s until a clean reboot. Cause unknown: compare good and bad boot timelines.
-3. **CPU capped at 1.59 / 1.9 GHz (IN PROGRESS, next task).** Cause found: the cpufreq hardware table of this chip offers
-   1017600 and 1708800 kHz (cpu0) and 2016000, 2112000, 2208000 kHz (cpu6), but `talos.dtsi`'s `cpu0_opp_table` /
-   `cpu6_opp_table` (written for the slower QCS615) lack them, so `qcom-cpufreq-hw` rejects them ("Voltage update failed";
-   voltages come from the hardware table). Plan, DTS only (no kernel build), nothing applied yet:
-   - add those OPPs in the mojito DTS (`opp-peak-kBps`: 1017600 like 998400; the others like the table's top entry,
-     little `<(1017000 * 4) (1363200 * 16)>`, big `<(1555000 * 4) (1363200 * 16)>`);
-   - **first add thermal throttling**: the CPU zones (`cpuss-0..3`, `cpu-1-0..3`) have only a 115 C critical trip and no
-     cooling map, so nothing slows the CPU. Add a passive trip (~95 C, `polling-delay-passive`) with cooling maps
-     (`cpuss-*` -> cpu0-5, `cpu-1-*` -> cpu6-7; check that zone/core mapping);
-   - compare with `tools/cpubench.sh`. Baseline on pkgrel=29: big core 5.32 s, little core 14.87 s, all eight 38.73 s;
-     under load 1593600 / 1900800 kHz and 73 C (46 C at start).
-4. PC-port charging (add module parameters to the SMB5 driver to try register settings live; a bad setting can suspend USBIN
+3. PC-port charging (add module parameters to the SMB5 driver to try register settings live; a bad setting can suspend USBIN
    until a replug). Stock leaves `0x1366 = 0x03` on an SDP; the driver writes `0x02`.
-5. Modem appears to ModemManager only ~30 s after boot.
-6. One boot hung at udev "Waiting for uevents" (cause unknown).
-7. Calls (q6voiced and surya's q6voice patches), mic noise (retest in a quiet room; speaker amps ruled out), second mic
+4. Modem appears to ModemManager only ~30 s after boot (OpenRC also lists `modemmanager` as failed although it runs).
+5. One boot hung at udev "Waiting for uevents" (cause unknown).
+6. Calls (q6voiced and surya's q6voice patches), mic noise (retest in a quiet room; speaker amps ruled out), second mic
    (needs `qcom,tx-channel-mapping` and probably driver work), speaker amps stay powered while idle.
+
+## CPU speed and throttling (done in pkgrel=30, DTS only)
+
+The cpufreq hardware table offers 1017.6 / 1708.8 MHz (little) and 2016 / 2112 / 2208 MHz (big) that `talos.dtsi`
+(QCS615) lacks, so `qcom-cpufreq-hw` rejected them ("Voltage update failed"). The mojito DTS adds those OPPs and gives
+every CPU zone passive trips at 90 and 95 C (2 C hysteresis, 250 ms polling, step_wise); `cpuss-*` cool `cpu0`'s
+policy, `cpu-1-*` `cpu6`'s (stock mapping: cpuss-2 cpu0-1, cpuss-1 cpu2-3, cpuss-0 cpu4-5, cpu-1-0/1 cpu6,
+cpu-1-2/3 cpu7). Stock's kernel trips are at 110 C but Android's thermal-engine throttles earlier; we have no such daemon.
+
+`tools/cpubench.sh`, r29 -> r30 DTB: big core 5.32 -> 4.58 s, little core 14.87 -> 13.79 s, all eight 38.73 -> 34.87 s;
+86 C at the end of the run. Sustained 2.5 min all-core load: big cluster steps down 2208 -> 2112 (once 2016) MHz and holds
+88-91 C; the little cluster stays at 1708.8 MHz. Not done: skin/battery temperature limits (only the SoC sensors are used).
 
 ## Workarounds still in place (the user wants as few as possible; fix causes, record any new shortcut)
 
@@ -118,6 +120,7 @@ audio); keep tones quiet and short; make trial settings revert themselves; ask b
 - Live SoundWire debugfs register writes leave the codec's register cache stale; reboot before judging anything after them.
 - The clock starts in 1970 until swclock/NTP; meson and similar reject "future" timestamps (`tar -m`).
 - `pkill -f pattern` kills the calling shell if its command line contains the pattern.
+- `timeout N sh -c 'a | b'` kills only the shell; the pipeline keeps running (load tests: `pkill -x sha256sum` after).
 
 ## Public repository
 
