@@ -5,6 +5,10 @@ State as of 2026-11-27 (Wi-Fi work 2026-11-26/27).
 
 ## START HERE (2026-11-27, end of the long session): where things stand
 
+### Housekeeping done 2026-11-27 (evening)
+- `qbootctl` + `qbootctl-openrc` installed and in runlevel default (slot B `Successful: 1`): plain reboots no longer burn retries.
+- Greeter PulseAudio disabled: `mainline/rootfs/var/lib/greetd/.config/pulse/client.conf` (`autospawn = no`), install owned by greetd.
+
 ### Update, later still on 2026-11-27: MICROPHONE WORKS (main mic, AMIC1)
 Cause of the exact zeros: the capture link used `<&swr_tx 0>`; the TX controller has `dout-ports = 1`, so DAI 0 is playback-only, the
 capture stream never allocated a master port (all 0x11xx-0x14xx port registers zero). Fix: `<&swr_tx 1>` (master port 2 now shows
