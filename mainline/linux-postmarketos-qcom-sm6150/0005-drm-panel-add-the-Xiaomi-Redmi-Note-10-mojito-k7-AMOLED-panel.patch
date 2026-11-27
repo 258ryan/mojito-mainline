@@ -38,7 +38,7 @@ diff -urN a/drivers/gpu/drm/panel/Makefile b/drivers/gpu/drm/panel/Makefile
 diff -urN a/drivers/gpu/drm/panel/panel-xiaomi-mojito-k7.c b/drivers/gpu/drm/panel/panel-xiaomi-mojito-k7.c
 --- a/drivers/gpu/drm/panel/panel-xiaomi-mojito-k7.c	1970-01-01 05:00:00.000000000 +0500
 +++ b/drivers/gpu/drm/panel/panel-xiaomi-mojito-k7.c	2026-11-26 12:19:32.781098816 +0500
-@@ -0,0 +1,300 @@
+@@ -0,0 +1,311 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * Xiaomi Redmi Note 10 (mojito / sunny) "k7 38 0c 0a" 1080x2400 AMOLED DSI video panel.
@@ -183,6 +183,7 @@ diff -urN a/drivers/gpu/drm/panel/panel-xiaomi-mojito-k7.c b/drivers/gpu/drm/pan
 +{
 +	struct mojito_k7 *ctx = to_mojito_k7(panel);
 +	struct mipi_dsi_multi_context dsi_ctx = { .dsi = ctx->dsi };
++	int ret;
 +
 +	mipi_dsi_dcs_set_display_on_multi(&dsi_ctx);
 +	if (dsi_ctx.accum_err)
@@ -190,7 +191,17 @@ diff -urN a/drivers/gpu/drm/panel/panel-xiaomi-mojito-k7.c b/drivers/gpu/drm/pan
 +
 +	ctx->on = true;
 +	/* Restore the brightness the backlight device asked for while the panel was off. */
-+	return mojito_k7_set_brightness(ctx, backlight_get_brightness(ctx->bl));
++	ret = mojito_k7_set_brightness(ctx, backlight_get_brightness(ctx->bl));
++	if (ret < 0)
++		return ret;
++
++	/*
++	 * Stock runs with display dimming on (CTRL display 0x28), so the panel fades between
++	 * brightness levels. Turn it on after the first value, so power-on does not ramp.
++	 */
++	mipi_dsi_dcs_write_seq_multi(&dsi_ctx, MIPI_DCS_WRITE_CONTROL_DISPLAY, 0x28);
++
++	return dsi_ctx.accum_err;
 +}
 +
 +static int mojito_k7_disable(struct drm_panel *panel)

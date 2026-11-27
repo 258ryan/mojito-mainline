@@ -5,6 +5,23 @@ State as of 2026-11-27 (Wi-Fi work 2026-11-26/27).
 
 ## START HERE (2026-11-27, end of the long session): where things stand
 
+### Smooth dimming; kernel pkgrel=28 flashed (2026-11-27)
+- Panel driver now sets CTRL display 0x28 (display dimming on, as stock) after the first brightness write: confirmed smooth.
+- Phone boot_b = package r28 (build #29) Image + its DTB (`r28/boot_b-r28.img` under the private audio-speaker folder); it carries
+  the mic, volume-up and vibrator DTS changes, so the hand-built DTB images are no longer needed.
+
+### OPEN: intermittent modem stall at boot (cause unknown)
+Seen on two of today's boots: "DOG detects stalled initialization" ~48.8 s (40 s after the modem came up at ~8.8 s). On both,
+`mojito-wifi` had not started hexagonrpcd yet (its start_pre waits for the WLFW service, which had not appeared). The modem
+recovered by itself on the r28 boot (Wi-Fi ~60 s, mobile data connected); on the other it kept crashing every ~40 s. First seen
+with the stock hexagonrpcd. Unproven idea: this boot-order wait and the modem's start-up race each other. Next: compare dmesg
+and service start times of good and bad boots.
+
+### Workarounds to replace (user wants as few as possible)
+No device package (hand-copied files, borrowed downstream initramfs); hexagonrpcd patch discards writes (should store them);
+log-quiet readiness + module blacklists in mojito-wifi/mojito-sensors; `clk_ignore_unused pd_ignore_unused`; plain wallpaper
+instead of finding the JXL lock-up; aw87xxx-seq driver; numeric `RX HPH Mode` (enum bug); SMMU identity / DPU timing patches.
+
 ### Faster Wi-Fi/Bluetooth and a correct clock (2026-11-27)
 - `mainline/hexagonrpc/` patch (writes accepted and discarded, >256 B input buffers, rename ignored), installed on the phone as
   `/usr/local/bin/hexagonrpcd-mojito`: ath10k up ~16 s and BT ~17 s after boot (were ~50 s), checked on a normal reboot; mobile
