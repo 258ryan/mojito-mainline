@@ -16,7 +16,7 @@ diff -urN a/arch/arm64/boot/dts/qcom/Makefile b/arch/arm64/boot/dts/qcom/Makefil
  dtb-$(CONFIG_ARCH_QCOM)	+= sm6350-sony-xperia-lena-pdx213.dtb
 --- a/arch/arm64/boot/dts/qcom/sm6150-xiaomi-mojito.dts	1970-01-01 05:00:00.000000000 +0500
 +++ b/arch/arm64/boot/dts/qcom/sm6150-xiaomi-mojito.dts	2026-11-27 07:00:00.000000000 +0500
-@@ -0,0 +1,1785 @@
+@@ -0,0 +1,1793 @@
 +// SPDX-License-Identifier: BSD-3-Clause
 +/*
 + * Xiaomi Redmi Note 10 (mojito / sunny), SM6150 "Talos".
@@ -781,7 +781,16 @@ diff -urN a/arch/arm64/boot/dts/qcom/Makefile b/arch/arm64/boot/dts/qcom/Makefil
 +		/* stock mics: amic1 = ADC1 (main), amic2/amic3 = ADC2 via ADC2 MUX INP2/INP3 */
 +		aux-devs = <&amp_aux>, <&amp_ear>;
 +
++		/*
++		 * The WCD937x RX inputs follow the RX macro outputs, as on the upstream WCD93xx boards:
++		 * without these routes the codec's analog paths (and the amplifiers) power up as soon as
++		 * the mixer connects them, before the RX macro has a clock or data, and stay powered; the
++		 * AUX stage then stays silent until it is powered up again during a stream.
++		 */
 +		audio-routing =
++			"IN1_HPHL", "HPHL_OUT",
++			"IN2_HPHR", "HPHR_OUT",
++			"IN3_AUX", "AUX_OUT",
 +			"AUX Amp IN", "AUX",
 +			"EAR Amp IN", "EAR",
 +			"AMIC1", "MIC BIAS1",
@@ -900,11 +909,9 @@ diff -urN a/arch/arm64/boot/dts/qcom/Makefile b/arch/arm64/boot/dts/qcom/Makefil
 +};
 +
 +/*
-+ * Adreno 612. Needs msm.ko loaded with separate_gpu_kms=1 while no display subsystem is enabled (the
-+ * display stays on simpledrm), which gives a render-only DRM device. Firmware: a630_sqe.fw and a612_rgmu.bin
-+ * are found through /lib/firmware/qcom (symlinks to /lib/firmware/postmarketos/, left by the downstream
-+ * install). The zap shader is signed for this phone by the vendor, so it must come from the stock firmware:
-+ * the split a612_zap.mdt + .b00-.b02 already in /lib/firmware/postmarketos/.
++ * Adreno 612. Firmware: a630_sqe.fw and a612_rgmu.bin come from firmware-xiaomi-mojito-mainline in
++ * /lib/firmware/postmarketos (on the firmware search path). The zap shader is signed for this phone by the
++ * vendor, so it must come from the stock firmware: the split a612_zap.mdt + .b00-.b02 in the same directory.
 + */
 +&gpu {
 +	status = "okay";
@@ -1019,15 +1026,16 @@ diff -urN a/arch/arm64/boot/dts/qcom/Makefile b/arch/arm64/boot/dts/qcom/Makefil
 +	status = "okay";
 +
 +	/*
-+	 * Awinic AW87xxx amplifiers, register tables from the stock playback trace (Android powers
-+	 * both for media). 0x58 (id 0x59, stock pa-channel 1) is fed by the WCD937x AUX output and has
-+	 * no reset line; 0x5b (id 0x5a, pa-channel 0, reset = gpio 83) by EAR. The bottom speaker
-+	 * played with both enabled (2026-11-27); 0x58 alone stayed silent.
++	 * Awinic amplifiers, register tables from the stock playback trace (Android powers both for
++	 * media). As in the stock DT and the vendor wcd937x driver ("AW87xxx_SPK" after AUX PGA =
++	 * pa-channel 0, "AW87xxx_RCV" after EAR PGA = pa-channel 1):
++	 *   0x5b AW87559 (id 0x5a, pa-channel 0, reset = gpio 83): main speaker (bottom), fed by AUX;
++	 *   0x58 AW87519 (id 0x59, pa-channel 1, no reset line): earpiece (top), fed by EAR.
 +	 */
-+	amp_aux: audio-amplifier@58 {
++	amp_ear: audio-amplifier@58 {
 +		compatible = "awinic,aw87xxx-seq";
 +		reg = <0x58>;
-+		sound-name-prefix = "AUX Amp";
++		sound-name-prefix = "EAR Amp";
 +		awinic,on-sequence = /bits/ 8 <0x70 0x80  0x01 0x00  0x01 0x00
 +			0x02 0x0c  0x03 0x05  0x04 0x05  0x05 0x0c  0x06 0x07  0x07 0xae  0x08 0x09
 +			0x09 0x08  0x0a 0x4b  0x61 0xbb  0x62 0x80  0x63 0x29  0x64 0x58  0x65 0xcd
@@ -1035,11 +1043,11 @@ diff -urN a/arch/arm64/boot/dts/qcom/Makefile b/arch/arm64/boot/dts/qcom/Makefil
 +		awinic,off-sequence = /bits/ 8 <0x01 0x00>;
 +	};
 +
-+	amp_ear: audio-amplifier@5b {
++	amp_aux: audio-amplifier@5b {
 +		compatible = "awinic,aw87xxx-seq";
 +		reg = <0x5b>;
 +		reset-gpios = <&tlmm 83 GPIO_ACTIVE_LOW>;
-+		sound-name-prefix = "EAR Amp";
++		sound-name-prefix = "AUX Amp";
 +		awinic,on-sequence = /bits/ 8 <0x78 0x39  0x79 0xe5  0x77 0xc4  0x77 0xc4
 +			0x78 0x7a  0x79 0x6c  0x77 0x81  0x66 0x70  0x58 0x01  0x02 0x49  0x03 0x0a
 +			0x04 0x00  0x05 0x08  0x06 0x0c  0x07 0x4b  0x08 0x8e  0x09 0x0b  0x0a 0x08

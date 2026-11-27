@@ -1,6 +1,6 @@
 # Handoff: postmarketOS on the Redmi Note 10 (mojito / sunny)
 
-State as of 2026-11-27, mainline Linux 7.4-rc4, kernel package `pkgrel=31`, installed as a package and booted through U-Boot (`boot_b`) + systemd-boot. Read this file first.
+State as of 2026-11-27, mainline Linux 7.4-rc4, kernel package `pkgrel=35`, installed as a package and booted through U-Boot (`boot_b`) + systemd-boot. Read this file first.
 Older detail (how each thing was found, dead ends, reverse engineering): [`docs/HANDOFF-history.md`](docs/HANDOFF-history.md).
 
 ## Status
@@ -13,7 +13,7 @@ Older detail (how each thing was found, dead ends, reverse engineering): [`docs/
 | Mobile data (LTE) | works; calls not set up |
 | CPU at full speed (1.71 / 2.21 GHz) with thermal throttling at 90 / 95 C | works (DTS, pkgrel=30) |
 | Accelerometer, light sensor, compass | works |
-| Speakers: left = earpiece (top), right = main speaker (bottom) | earpiece works; bottom speaker silent after every boot until its path is re-powered once (open problem 1) |
+| Speakers: left = earpiece (top), right = main speaker (bottom) | works (bottom speaker fixed 2026-11-27, pkgrel=34) |
 | Microphone (main, AMIC1) | works; hiss around 7 kHz, faint at the stock gain |
 | Power and both volume keys, vibrator | works; very short vibration pulses are hardly felt |
 | Charging from a wall charger, battery percentage | works |
@@ -39,38 +39,36 @@ Item 3 VERIFIED (one run): 20 s s2idle with RTC wake: screen back, ADSP and mode
 
 ## Open problems, most useful first
 
-1. **Bottom speaker silent after boot** (2026-11-27, reproduced 3 boots, U-Boot and ABL alike). The first AUX power-up after
-   boot gives no sound; after `amixer cset name='AUX Amp PA Switch' 0` then `1` during playback (DAPM re-powers WCD937x AUX
-   DAC/PGA and the amp) it works, also through later idle power cycles, until the next boot. NOT the cause: amp registers
-   (rewriting only the amp's on-sequence over I2C mid-stream stays silent), codec/rx-macro registers (full hardware dumps,
-   cache bypassed, identical in silent and working state), mixer/UCM (identical). AUX and HPHL `PDM WDOG` interrupts fire on
-   power cycles in both states (`/proc/interrupts`), likely at teardown; may be the pops/crackles the user hears (also: amp
-   enabled without settling delay, PulseAudio suspends the sink after 5 s idle). LEAD: across all RX SoundWire controller
-   registers (debugfs `soundwire/master-3-0/qualcomm-sdw/qualcomm-registers`) the only silent/working difference is
-   0x200 = `0x80000` (`SWRM_INTERRUPT_STATUS_CMD_IGNORED_AND_EXEC_CONTINUED`, bit 19; outside the driver's interrupt mask,
-   so never logged): a bus command to the codec was ignored, most likely a DPn port write (not in the codec regmap). Vendor
-   techpack wcd937x (LineageOS lineage-22.2 `techpack/audio/asoc/codecs/wcd937x/wcd937x.c`) starts the SoundWire datapath in
-   the AUX PA PRE_PMU (`swr_slvdev_datapath_control(..., true)`) and keeps RX3 muted until AUX PA POST_PMU (bolero
-   RX_MUTE event); mainline does neither. Next: debug-log ignored commands (address) in `qcom.c`, then fix where that write
-   happens. Do not read the codec's `soundwire/.../registers` debugfs file: every read fails (-5) and floods the log.
-   Older plan: dumps in the private
-   `~/.claude-work/pmos-mojito/speaker-first-play-2026-11-27/`. Test with the phone logged in (an SSH-only `paplay` spawns a
-   PulseAudio without device access that plays to `auto_null`); `amixer` over SSH needs sudo (no uaccess).
-2. **Suspend, further testing.** Fixed for a 20 s s2idle (patch 0020; before it the ADSP crashed on every resume). Still to
+1. **Suspend, further testing.** Fixed for a 20 s s2idle (patch 0020; before it the ADSP crashed on every resume). Still to
    check: audio after resume, long sleeps, sleep started by Phosh/gsd-power (battery, 900 s idle; goes through elogind),
    wake by power button, incoming calls/data, and idle power draw. Only `s2idle` exists. Test:
    `echo +20 > /sys/class/rtc/rtc0/wakealarm; echo freeze > /sys/power/state` (run detached; write logs to disk).
-3. **Modem stalls at boot, sometimes** (`DOG detects stalled initialization` ~48 s). Seen on several boots, with stock and
+2. **Modem stalls at boot, sometimes** (`DOG detects stalled initialization` ~48 s). Seen on several boots, with stock and
    patched hexagonrpcd. `mojito-wifi` had not started hexagonrpcd yet (it waits for QMI 69, which had not appeared). It
    usually recovers; once it crashed every ~40 s until a clean reboot. Cause unknown: compare good and bad boot timelines.
-4. PC-port charging (add module parameters to the SMB5 driver to try register settings live; a bad setting can suspend USBIN
+3. PC-port charging (add module parameters to the SMB5 driver to try register settings live; a bad setting can suspend USBIN
    until a replug). Stock leaves `0x1366 = 0x03` on an SDP; the driver writes `0x02`.
-5. Modem appears to ModemManager only ~30 s after boot (OpenRC also lists `modemmanager` as failed although it runs).
-6. One boot hung at udev "Waiting for uevents" (cause unknown).
-7. Small: the DTS comment above `&gpu` still says the GPU firmware comes through downstream `/lib/firmware/qcom` symlinks;
-   it now comes from `firmware-xiaomi-mojito-mainline` via the `/lib/firmware/postmarketos` search path. Fix with the next kernel change.
-8. Calls (q6voiced and surya's q6voice patches), mic noise (retest in a quiet room; speaker amps ruled out), second mic
-   (needs `qcom,tx-channel-mapping` and probably driver work), speaker amps stay powered while idle.
+4. Modem appears to ModemManager only ~30 s after boot (OpenRC also lists `modemmanager` as failed although it runs).
+5. One boot hung at udev "Waiting for uevents" (cause unknown).
+6. Pops/crackles on the speakers (user report 2026-11-27): retest after the pkgrel=34 routing fix; see the Speakers section.
+7. Calls (q6voiced and surya's q6voice patches), mic noise (retest in a quiet room; speaker amps ruled out), second mic
+   (needs `qcom,tx-channel-mapping` and probably driver work).
+
+## Speakers: bottom speaker silent after boot (FIXED 2026-11-27, kernel pkgrel=34)
+
+Symptom: the main (bottom) speaker gave no sound after every boot until its path was re-powered once during a stream
+(`AUX Amp PA Switch` 0/1), then worked until the next boot. Cause, from DAPM tracing
+(`/sys/kernel/tracing/events/asoc/snd_soc_dapm_widget_power`): the WCD937x RX inputs `IN1_HPHL`/`IN2_HPHR`/`IN3_AUX` are DAPM
+inputs, so without routes from the RX macro outputs the codec's analog paths (RDAC3/4, EAR/AUX PGA, class-H, buck) and the
+amplifiers powered up at login, with no RX clock or data, and never powered down; the AUX stage does not come up that way.
+Fix: `audio-routing` `"IN1_HPHL", "HPHL_OUT"`, `"IN2_HPHR", "HPHR_OUT"`, `"IN3_AUX", "AUX_OUT"` (as upstream sm8250-mtp,
+sm8450-hdk, X13s). Now the paths power with each stream after `RX_MCLK` and off when PulseAudio suspends the sink.
+Also corrected (pkgrel=33): the amplifier roles were swapped. Stock DT + vendor wcd937x ("AW87xxx_SPK" after AUX PGA =
+pa-channel 0): 0x5b AW87559 = main speaker on AUX ("AUX Amp"), 0x58 AW87519 = earpiece on EAR ("EAR Amp").
+Ruled out on the way (for the record): amp register tables, codec/rx-macro registers (identical), SoundWire port switch,
+ignored SoundWire commands (debug patch, removed in pkgrel=35). Still open: pops/crackles (retest now that the paths follow
+the stream; the vendor also mutes RX3 until the AUX PA is up and starts the SoundWire datapath in AUX PA PRE_PMU).
+Vendor sources used: Neternels/android_kernel_xiaomi_sunny (techpack wcd937x, aw87xxx), LineageOS sm6150 lineage-22.2.
 
 ## CPU speed and throttling (done in pkgrel=30, DTS only)
 
