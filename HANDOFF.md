@@ -1,6 +1,6 @@
 # Handoff: postmarketOS on the Redmi Note 10 (mojito / sunny)
 
-State as of 2026-11-27, mainline Linux 7.4-rc4, kernel package `pkgrel=36`, installed as a package and booted through U-Boot (`boot_b`) + systemd-boot. Read this file first.
+State as of 2026-11-27, mainline Linux 7.4-rc4, kernel package `pkgrel=37` installed (repo: 38, not built yet), installed as a package and booted through U-Boot (`boot_b`) + systemd-boot. Read this file first.
 Older detail (how each thing was found, dead ends, reverse engineering): [`docs/HANDOFF-history.md`](docs/HANDOFF-history.md).
 
 ## Status
@@ -54,7 +54,12 @@ Item 3 VERIFIED (one run): 20 s s2idle with RTC wake: screen back, ADSP and mode
    from ordinary sounds or idle power cycles (tested with silent streams). Reproduced by `pulseaudio -k`: the UCM
    DisableSequence switches the amp switches off while PulseAudio's stream is still running, so DAPM powers the whole speaker
    path down mid-stream (trace: amps, EAR/AUX PGA, RDAC3/4, RX_MCLK within 20 ms). Idle power-down after the stream stops does
-   not pop. Fix options: UCM disable ordering, or the vendor's RX mute around the WCD937x PA power-down.
+   not pop. PARKED (user, 2026-11-27): only at these hand-overs, never in normal use. Tried without effect: UCM disable
+   sequence muting digitally + staged amp-off with msleep (the stream closes and DAPM powers down before it matters),
+   20 ms amp ramp-down wait in the amp PRE_PMD (pkgrel=37, removed in 38), amp shutdown handler (kept, as vendor).
+   Both paths pop on their own (only EAR or only AUX enabled), so the shared class-H/VDD_BUCK/RX clock power-down is
+   the next suspect; next try: the vendor's RX mute (bolero RX_MUTE around the PA) / keeping supplies up until the PAs
+   are off, in wcd937x/lpass-rx-macro.
 7. Calls (q6voiced and surya's q6voice patches), mic noise (retest in a quiet room; speaker amps ruled out), second mic
    (needs `qcom,tx-channel-mapping` and probably driver work).
 
