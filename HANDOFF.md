@@ -166,12 +166,23 @@ from the packaged `u-boot.img`: ABL silently refused images packed with the r29t
 
 | Workaround | Proper fix |
 |---|---|
-| Wi-Fi and Bluetooth loaded by script, modules blacklisted | proper ordering in the drivers/services |
+| Wi-Fi and Bluetooth loaded by script, modules blacklisted | proper ordering in the drivers/services (findings below the table) |
 | "No DSP request for 3 s" means the sensor PD is served | a real ready notification |
 | Plain wallpaper (the default JPEG XL one locks up the phone at login) | find why glycin-jxl exhausts memory into a hard lock-up |
 | `aw87xxx-seq` amplifier driver replaying vendor register tables | load the vendor profiles in a mainline Awinic driver |
 | SMMU identity domain (0006), stopping the bootloader timing engine (0007) | upstreamable fixes |
 | hexagonrpcd patch not upstream | send it |
+
+Wi-Fi/BT ordering, findings 2026-11-27 (all tests reverted):
+- Not the WCN reference clock: with `clocks = <&rpmhcc RPMH_RF_CLK2>` on the wcn3990-pmu node (sequencer "clock-enable" unit)
+  and as `cxo_ref_clk_pin` on the wifi node, an early `hci_uart` (6 s) still failed and Wi-Fi then got 119. RPMh keeps the
+  RF clocks on anyway.
+- `hci_uart` loaded right after QMI 69 (9.5 s, before ath10k): first power-on fails, the retry works (12.3 s); then
+  bluetoothd's power-cycle drops the PMU rails and BT and WLAN are both dead for the boot (119 at 14.5 s).
+- With ath10k loaded first (normal order) BT power cycles are reliable (5/5): ath10k's wlan pwrseq vote keeps the shared
+  PMU rails up. So the real rule is "the WCN rails must stay up once the modem has initialised the chip" (stock icnss
+  votes them at boot). Proper fix direction: ath10k_snoc loadable early (retry the capability request on 119 instead of
+  failing), so it holds the rails from boot; then BT can autoload.
 
 Already removed: `clk_ignore_unused` (2026-11-27: the simple-framebuffer node now holds the 8 scan-out clocks; the
 23 clocks the cleanup turns off are off in stock Android too, per its boot clock trace), hand-installed files and the borrowed downstream initramfs (device package `mojito-device`), `pd_ignore_unused`, discarded sensor-registry writes, log-line readiness guessing, numeric `RX HPH Mode`,
