@@ -3,6 +3,66 @@
 For the next agent picking this up. Read the START HERE section, then the rest as needed, before touching the phone.
 State as of 2026-11-27 (Wi-Fi work 2026-11-26/27).
 
+## START HERE (2026-11-27, end of the long session): where things stand
+
+**Working on slot B (mainline 7.4-rc4, kernel package r26, build #27):** everything from the older list below plus
+**Wi-Fi** (auto at boot, ~50 s), **Bluetooth** (WCN3950, after Wi-Fi), **Phosh** (stable again), **sensors** (accelerometer + light via
+the ADSP sensor PD / libssc), **sound card + speaker** (WCD9375 over SoundWire, both AW87xxx amps, UCM, PulseAudio).
+**Not working yet:** microphone (records exact zeros), headphones untested (nobody had any), earpiece-only / stereo split,
+calls, PC-port (SDP) charging (AICL settles at 50 mA; the wall charger is fine), volume-up, haptics, suspend.
+
+### Exactly what is on the phone right now
+- `boot_b` = r26 Image + r26 DTB (msm-id 0x163, board-id 0x22 patched in) + the ramdisk/cmdline of the running image
+  (unpacked with the scratch `bootv2.py`; repack with `mkbootimg.py` from `chroot_rootfs_xiaomi-mojito/usr/share/android-tools/mkbootimg/`,
+  the native chroot's copy disappears after builds). Modules r26 in `/lib/modules/7.4.0-rc4-sm6150` (`.old` = r25).
+- Runlevel default adds `mojito-wifi` (from `mainline/rootfs/etc/init.d/`). `/etc/modprobe.d/ath10k-mojito.conf` blacklists
+  `ath10k_snoc` and `hci_uart` (the service loads them in order). No `hexagonrpcd-adsp-sensorspd` service, no audio blacklist.
+- Packages added by hand: bootmac, hexagonrpcd, i2c-tools, libgpiod, bluez-btmgmt, wlr-randr, Phosh (postmarketos-ui-phosh), Alpine gmobile r0.
+  **qbootctl NOT installed** (apk hit a DNS error); until it is, forced resets mark slot B unbootable -> `fastboot set_active b`.
+- Files from `mainline/rootfs/` installed: profile.d/gmobile-mojito.sh (cutout via G_RESOURCE_OVERLAYS),
+  /usr/share/gmobile-mojito/..., glib schema override (plain wallpaper; then `glib-compile-schemas`), UCM
+  (`/usr/share/alsa/ucm2/conf.d/sm8250/Xiaomi Redmi Note 10.conf`, `/usr/share/alsa/ucm2/Xiaomi/mojito/HiFi.conf`).
+  The accelerometer mount matrix (`rootfs/usr/lib/udev/rules.d/81-libssc-xiaomi-mojito.rules`) is parked at /root/ (not active):
+  without it upright reads `bottom-up`; it was NOT the freeze cause, re-enable and re-test.
+- User `user` was added to `audio`, `video`, `input` by hand (the install lacked `audio`: PulseAudio could not open the card).
+- Rootfs is 101 GB (grown online, see the Wi-Fi section). Wi-Fi SSH also works: `user@<wlan0 IP>` (use it for big transfers: USB networking
+  drops/freezes on large copies).
+
+### Workflow that works
+1. Edit the repo. DTS-only: `mainline/build-dtb.sh <linux-tree> out.dtb` + repack + flash (no build).
+2. Kernel changes: bump pkgrel, update sha512sums, regenerate patch 0001 from the DTS (python snippet in git history), then
+   **rsync `mainline/linux-postmarketos-qcom-sm6150/` to `~/.local/var/pmbootstrap/cache_git/pmaports/device/testing/linux-postmarketos-qcom-sm6150/`**
+   (pmbootstrap builds from there, not from the repo!) and ask the user for `pmbootstrap build linux-postmarketos-qcom-sm6150`.
+   Config changes = ~13 min, .c only = ~3 min. Check `packages/edge/aarch64/` for the new pkgrel.
+3. `tools/install-modules.sh <unpacked apk> <phone ip>` (SSH_ASKPASS + PHONE_PW env), build boot.img, reboot to fastboot with the
+   python `reboot(..., "bootloader")` script (`/tmp` is empty after reboots: copy it again), `fastboot flash boot_b`, `set_active b`, `reboot`.
+   Always verify `uname -v` afterwards (a hung SSH once left the old kernel running with new modules).
+
+### Audio: what works and how (details in "Audio status" below)
+- Kernel: patch 0015 `pinctrl-sm6150-lpass-lpi` (= SM7150 LPI block, 2 mux fixes), wcd937x cansleep reset; patch 0016 `aw87xxx-seq`
+  (amps from DT register tables, DAPM, `AUX Amp PA Switch` / `EAR Amp PA Switch`).
+- DT: LPI @0x62b52000 (vote LPASS_HW_MACRO; un-vote 0x100f6 "Unknown cmd" is harmless), VA/TX/RX macros, SoundWire TX (SPI 137 + PDC 108)
+  / RX (SPI 138) with **7-entry port tables**, WCD9375 (reset = LPI pin 6), amps on i2c3 (0x58 AUX, 0x5b EAR with reset gpio 83), card `X10`.
+- **Speaker needs both amps AND the HPH-left stage settings** (the EAR path runs RX0 -> INT0 -> DEM MUX CLSH_DSM_OUT -> HPHL_OUT -> RDAC3 -> EAR).
+  Without the HPH settings (`HPHL_COMP Switch 0`, `HPHL Volume`, ...) the amps only pop. All of it is in the UCM verb/device.
+- UCM caps the hardware digital gain at 72/84 (-12 dB); the user asked for no loud test tones: keep tests at <= -30 dB and short.
+- PulseAudio (not PipeWire) owns the hardware here (`wireplumber.conf.d/51-pulseaudio.conf`). **The greeter (greetd user) also runs a
+  PulseAudio that can hold the card** -> the user session gets nothing. Killed by hand this session; needs a permanent fix
+  (e.g. `autospawn = no` for the greetd user, or the pmOS way of handing the card over). Speaker profile is `HiFi (Mic, Speaker)`;
+  UCM now gives Speaker priority 200 over Headphones 100 (jack availability reads "unknown").
+- Last step done: profile set to Speaker at 30 % in PulseAudio; **the user had not confirmed a Phosh system sound yet.**
+
+### Next steps, in order
+1. Confirm speaker playback from Phosh at low volume; fix the greeter PulseAudio; install qbootctl.
+2. **Mic:** capture = short transient then exact zeros with both TX timing tables (perf and stock superset). Route = identical to surya's UCM.
+   Next: decode the stock `tx_swr_master qcom,swr-port-mapping` triplets (port, type, ch_mask) against mainline `qcom,tx-port-mapping`,
+   check SoundWire TX port enable/channel masks in `/sys/kernel/debug/soundwire/master-3-0/` during capture, compare din/dout handling.
+3. Which amp drives which speaker (0x5b + EAR = bottom so far; 0x58 + AUX alone was silent), stereo, earpiece for calls; headphones by ear.
+4. A **mainline device package** (deviceinfo for the v2 boot image, depends on the miatoll-style set: soc-qcom, hexagonrpcd, bootmac,
+   swclock-offset, qbootctl, rmtfs/tqftpserv/qrtr/ModemManager, the private `firmware-xiaomi-mojito-mainline`, user groups) + `mainline/rootfs/`.
+5. Calls (q6voiced, surya's q6voice patches), charger SDP path (stock sets `0x1366=0x03` + ICL override toggle; ours `0x02`, AICL -> 50 mA),
+   accelerometer mount matrix, MAC/2.4-only scan check, volume-up, haptics, suspend.
+
 ## *** 2026-11-27 (later): Wi-Fi WORKS on mainline; Phosh back (read this first) ***
 
 Verified on the phone (slot B, r21 kernel, cold boot, nothing by hand): `wlan0` comes up, scans (2.4 GHz seen), associates and gets
