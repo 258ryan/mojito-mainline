@@ -166,14 +166,18 @@ from the packaged `u-boot.img`: ABL silently refused images packed with the r29t
 
 | Workaround | Proper fix |
 |---|---|
-| Wi-Fi and Bluetooth loaded by script, modules blacklisted | proper ordering in the drivers/services (findings below the table) |
-| "No DSP request for 3 s" means the sensor PD is served | a real ready notification |
+| Wi-Fi and Bluetooth loaded by a service (`mojito-wifi`), modules blacklisted from udev autoload | the order is a firmware rule (below); needs a kernel-visible "sensor PD served" signal before it can be expressed in the drivers |
+| "No DSP request for 3 s" means the sensor PD is served (hexagonrpcd-mojito's `served` marker) | a real ready notification from hexagonrpcd (propose with the patch upstream) |
 | Plain wallpaper (the default JPEG XL one locks up the phone at login) | find why glycin-jxl exhausts memory into a hard lock-up |
 | `aw87xxx-seq` amplifier driver replaying vendor register tables | load the vendor profiles in a mainline Awinic driver |
 | SMMU identity domain (0006), stopping the bootloader timing engine (0007) | upstreamable fixes |
 | hexagonrpcd patch not upstream | send it |
 
-Wi-Fi/BT ordering, findings 2026-11-27 (all tests reverted):
+Wi-Fi/BT ordering, findings 2026-11-27 (all tests reverted). Structure since device 2-r4 / hexagonrpcd-mojito r3:
+`hexagonrpcd-mojito` (OpenRC, user fastrpc, secure node, after QMI 69) -> `/run/hexagonrpcd-mojito/served` -> `mojito-wifi`
+(ath10k_snoc, then hci_uart after wlan0) and `mojito-sensors` (iio-sensor-proxy). Verified on a clean boot: no 119, Wi-Fi
+connected, BT powered, sensors up. The stock hexagonrpcd-adsp-sensorspd service hard-codes `/dev/fastrpc-adsp` and the
+unpatched binary; making the node configurable there is a small pmaports change worth proposing.
 - Not the WCN reference clock: with `clocks = <&rpmhcc RPMH_RF_CLK2>` on the wcn3990-pmu node (sequencer "clock-enable" unit)
   and as `cxo_ref_clk_pin` on the wifi node, an early `hci_uart` (6 s) still failed and Wi-Fi then got 119. RPMh keeps the
   RF clocks on anyway.
