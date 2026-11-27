@@ -98,7 +98,22 @@ reset, as the vendor driver). Still open: pops (retest now that the paths follow
 the stream; the vendor also mutes RX3 until the AUX PA is up and starts the SoundWire datapath in AUX PA PRE_PMU).
 Vendor sources used: Neternels/android_kernel_xiaomi_sunny (techpack wcd937x, aw87xxx), LineageOS sm6150 lineage-22.2.
 
-## Public firmware package (IN PROGRESS, 2026-11-27)
+## Going public: status (2026-11-27)
+
+- Firmware: public candidate built ONLY from the official ROM, local repo `~/.claude-work/mojito-firmware-public` (no remote):
+  `tools/build-tree.sh <NON-HLOS.bin BTFM.bin dspso.bin vendor_a.img dir> <out>` -> 455 files, 112 MB, empty sensor registry;
+  `package/APKBUILD` = firmware-xiaomi-mojito-mainline 2. NOT yet tested on the phone (user will test later; the phone still
+  runs the private 1-r0). Hosting (public repo of blobs vs. extraction from the ROM) is the user's decision.
+- mojito-device: ready to publish content-wise (Finder packages moved to the private local repo `~/.claude-work/finder-packages`,
+  generic sync script, public README; full history scanned: no private data). Its history still contains the Finder recipes
+  (commit b210b17, removed in 431564f): drop that commit before publishing if they must never be public (needs a force-push).
+- Fresh install: the initramfs resizes the nested GPT correctly (tested: a 4K-sector image grown into a larger device shows
+  the free space to `parted -s print free`). The 917 MB root of the current phone came from the downstream initramfs (no
+  rootfs_image_sector_size). To prove on a real from-scratch `pmbootstrap install`.
+- Kernel patches: checkpatch on 0003/0009/0011/0013/0017-0021: only MISSING_SIGN_OFF (the author must add Signed-off-by)
+  and commit-log lines over 75 characters; no code findings.
+
+## Public firmware package (details)
 
 Goal: a public firmware source so the port can go to pmaports (testing). The private package is a full copy of the vendor
 firmware partitions and must not be published as is.
