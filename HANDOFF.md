@@ -45,8 +45,15 @@ Item 3 VERIFIED (one run): 20 s s2idle with RTC wake: screen back, ADSP and mode
    (rewriting only the amp's on-sequence over I2C mid-stream stays silent), codec/rx-macro registers (full hardware dumps,
    cache bypassed, identical in silent and working state), mixer/UCM (identical). AUX and HPHL `PDM WDOG` interrupts fire on
    power cycles in both states (`/proc/interrupts`), likely at teardown; may be the pops/crackles the user hears (also: amp
-   enabled without settling delay, PulseAudio suspends the sink after 5 s idle). Next: compare the vendor techpack
-   wcd937x AUX enable sequence (delays, class-H order, `WCD937X_AUX_AUXPA` writes) with mainline; dumps in the private
+   enabled without settling delay, PulseAudio suspends the sink after 5 s idle). LEAD: across all RX SoundWire controller
+   registers (debugfs `soundwire/master-3-0/qualcomm-sdw/qualcomm-registers`) the only silent/working difference is
+   0x200 = `0x80000` (`SWRM_INTERRUPT_STATUS_CMD_IGNORED_AND_EXEC_CONTINUED`, bit 19; outside the driver's interrupt mask,
+   so never logged): a bus command to the codec was ignored, most likely a DPn port write (not in the codec regmap). Vendor
+   techpack wcd937x (LineageOS lineage-22.2 `techpack/audio/asoc/codecs/wcd937x/wcd937x.c`) starts the SoundWire datapath in
+   the AUX PA PRE_PMU (`swr_slvdev_datapath_control(..., true)`) and keeps RX3 muted until AUX PA POST_PMU (bolero
+   RX_MUTE event); mainline does neither. Next: debug-log ignored commands (address) in `qcom.c`, then fix where that write
+   happens. Do not read the codec's `soundwire/.../registers` debugfs file: every read fails (-5) and floods the log.
+   Older plan: dumps in the private
    `~/.claude-work/pmos-mojito/speaker-first-play-2026-11-27/`. Test with the phone logged in (an SSH-only `paplay` spawns a
    PulseAudio without device access that plays to `auto_null`); `amixer` over SSH needs sudo (no uaccess).
 2. **Suspend, further testing.** Fixed for a 20 s s2idle (patch 0020; before it the ADSP crashed on every resume). Still to
