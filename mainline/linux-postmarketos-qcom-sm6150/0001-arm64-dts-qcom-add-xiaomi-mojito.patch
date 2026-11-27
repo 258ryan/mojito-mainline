@@ -16,7 +16,7 @@ diff -urN a/arch/arm64/boot/dts/qcom/Makefile b/arch/arm64/boot/dts/qcom/Makefil
  dtb-$(CONFIG_ARCH_QCOM)	+= sm6350-sony-xperia-lena-pdx213.dtb
 --- a/arch/arm64/boot/dts/qcom/sm6150-xiaomi-mojito.dts	1970-01-01 05:00:00.000000000 +0500
 +++ b/arch/arm64/boot/dts/qcom/sm6150-xiaomi-mojito.dts	2026-11-27 07:00:00.000000000 +0500
-@@ -0,0 +1,1793 @@
+@@ -0,0 +1,1800 @@
 +// SPDX-License-Identifier: BSD-3-Clause
 +/*
 + * Xiaomi Redmi Note 10 (mojito / sunny), SM6150 "Talos".
@@ -72,14 +72,21 @@ diff -urN a/arch/arm64/boot/dts/qcom/Makefile b/arch/arm64/boot/dts/qcom/Makefil
 +			reg = <0x0 0x9c000000 0x0 (1080 * 2400 * 4)>;
 +			memory-region = <&cont_splash_mem>;
 +			/*
-+			 * Deliberately NO power-domains and NO clocks here, although holding MDSS_CORE_GDSC and the display
-+			 * clocks keeps the splash alive until msm loads. The bootloader leaves its splash pipeline running and
-+			 * the DPU's CTL stuck in a hardware reset (it never accepts a frame: "hw recovery is not complete for
-+			 * ctl:1", blue screen); only a power cycle of the display core clears that, and holding the domain on
-+			 * means it is never cycled. Without the hold, genpd collapses MDSS_CORE_GDSC once nothing uses it
-+			 * and msm powers it up fresh, which works. Cost: a few seconds of green/black between the splash and
-+			 * the first real frame. An mdss "resets" line (DISP_CC_MDSS_CORE_BCR) hangs the phone at probe.
++			 * The clocks the bootloader's scan-out runs on, held until msm replaces this framebuffer, so the
++			 * unused-clock cleanup does not stop the splash (green fade before the first real frame).
++			 * Deliberately NO power-domains: holding MDSS_CORE_GDSC means the display core is never power
++			 * cycled, and the DPU's CTL then stays in the hardware reset the bootloader leaves it in ("hw
++			 * recovery is not complete for ctl:1", blue screen). An mdss "resets" line
++			 * (DISP_CC_MDSS_CORE_BCR) hangs the phone at probe.
 +			 */
++			clocks = <&gcc GCC_DISP_HF_AXI_CLK>,
++				 <&dispcc DISP_CC_MDSS_AHB_CLK>,
++				 <&dispcc DISP_CC_MDSS_MDP_CLK>,
++				 <&dispcc DISP_CC_MDSS_BYTE0_CLK>,
++				 <&dispcc DISP_CC_MDSS_BYTE0_INTF_CLK>,
++				 <&dispcc DISP_CC_MDSS_PCLK0_CLK>,
++				 <&dispcc DISP_CC_MDSS_ESC0_CLK>,
++				 <&dispcc DISP_CC_MDSS_VSYNC_CLK>;
 +			width = <1080>;
 +			height = <2400>;
 +			stride = <(1080 * 4)>;

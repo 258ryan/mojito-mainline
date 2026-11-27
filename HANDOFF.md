@@ -1,6 +1,6 @@
 # Handoff: postmarketOS on the Redmi Note 10 (mojito / sunny)
 
-State as of 2026-11-27, mainline Linux 7.4-rc4, kernel package `pkgrel=37` installed (repo: 38, not built yet), installed as a package and booted through U-Boot (`boot_b`) + systemd-boot. Read this file first.
+State as of 2026-11-27, mainline Linux 7.4-rc4, kernel package `pkgrel=38`, device package 2-r3, installed as a package and booted through U-Boot (`boot_b`) + systemd-boot. Read this file first.
 Older detail (how each thing was found, dead ends, reverse engineering): [`docs/HANDOFF-history.md`](docs/HANDOFF-history.md).
 
 ## Status
@@ -60,7 +60,13 @@ Item 3 VERIFIED (one run): 20 s s2idle with RTC wake: screen back, ADSP and mode
    Both paths pop on their own (only EAR or only AUX enabled), so the shared class-H/VDD_BUCK/RX clock power-down is
    the next suspect; next try: the vendor's RX mute (bolero RX_MUTE around the PA) / keeping supplies up until the PAs
    are off, in wcd937x/lpass-rx-macro.
-7. Calls (q6voiced and surya's q6voice patches), mic noise (retest in a quiet room; speaker amps ruled out), second mic
+7. Bluetooth setup flaky (any boot, with or without `clk_ignore_unused`): the second setup (bluetoothd power-on) or a
+   re-probe sometimes fails during the firmware download: UART frame errors (-84), "QCA TLV response size mismatch",
+   "Failed to request file: qca/cmbtfw12.tlv", retries, then hci0 is removed. Not a clock (stock leaves the 23 unclaimed
+   clocks off; the UART clock chain is identical). Suspects: baud switch / flow control on the QUP UART.
+8. `modprobe -r hci_uart` after such a failure oopses (NULL in `tty_lock` from `ttyport_close` <- `serdev_device_close`
+   <- `hci_uart_unregister_device` <- `qca_serdev_remove`): upstream bug, closing an already closed serdev port.
+9. Calls (q6voiced and surya's q6voice patches), mic noise (retest in a quiet room; speaker amps ruled out), second mic
    (needs `qcom,tx-channel-mapping` and probably driver work).
 
 ## Speakers: bottom speaker silent after boot (FIXED 2026-11-27, kernel pkgrel=34)
@@ -160,7 +166,6 @@ from the packaged `u-boot.img`: ABL silently refused images packed with the r29t
 
 | Workaround | Proper fix |
 |---|---|
-| `clk_ignore_unused` on the command line | claim the running clocks (audit: display PLLs/`disp_cc`, `ipa`, LPASS ids, rf/bb clocks, UFS/USB refs) |
 | Wi-Fi and Bluetooth loaded by script, modules blacklisted | proper ordering in the drivers/services |
 | "No DSP request for 3 s" means the sensor PD is served | a real ready notification |
 | Plain wallpaper (the default JPEG XL one locks up the phone at login) | find why glycin-jxl exhausts memory into a hard lock-up |
@@ -168,7 +173,8 @@ from the packaged `u-boot.img`: ABL silently refused images packed with the r29t
 | SMMU identity domain (0006), stopping the bootloader timing engine (0007) | upstreamable fixes |
 | hexagonrpcd patch not upstream | send it |
 
-Already removed: hand-installed files and the borrowed downstream initramfs (device package `mojito-device`), `pd_ignore_unused`, discarded sensor-registry writes, log-line readiness guessing, numeric `RX HPH Mode`,
+Already removed: `clk_ignore_unused` (2026-11-27: the simple-framebuffer node now holds the 8 scan-out clocks; the
+23 clocks the cleanup turns off are off in stock Android too, per its boot clock trace), hand-installed files and the borrowed downstream initramfs (device package `mojito-device`), `pd_ignore_unused`, discarded sensor-registry writes, log-line readiness guessing, numeric `RX HPH Mode`,
 hand-added `audio video input` user groups (same mechanism), greeter PulseAudio `autospawn = no` (not needed: elogind's uaccess ACLs hand `/dev/snd` to the user session; verified with a
 test sound 2026-11-27. The greeter's PulseAudio does NOT exit at login: its feedbackd keeps it alive, and elogind does not kill
 a closed session's processes. It keeps only `controlC0` open, no PCM; stock pmOS/phrog behaviour, harmless).
@@ -211,9 +217,8 @@ audio); keep tones quiet and short; make trial settings revert themselves; ask b
 - Large transfers over USB networking can freeze the phone; use Wi-Fi. USB networking sometimes drops while the phone is fine.
 - A stuck phone: Power + Volume-down for 10-15 s reaches fastboot. No log survives a reset.
 - The speakers have no protection algorithm.
-- `clk_ignore_unused` test boot (2026-11-27, one-shot systemd-boot entry `pmos-noclk+1-0.conf`): 23 unclaimed GCC/disp_cc/ce
-  clocks were turned off at 1.0 s; display blinked green until msm took over (simplefb holds no clocks), Bluetooth's second
-  setup failed (-84); UFS, USB, Wi-Fi, modem, GPU fine. Fix needs consumers for those clocks (framebuffer clocks first).
+- One-shot test boots: a systemd-boot entry `<name>+1-0.conf` (sort-key before `postmarketOS`, no loader.conf) boots once;
+  systemd-boot renames it `+0-1` and the next boot falls back to `pmos.conf`. Used for the `clk_ignore_unused` tests.
 - Live SoundWire debugfs register writes leave the codec's register cache stale; reboot before judging anything after them.
 - The clock starts in 1970 until swclock/NTP; meson and similar reject "future" timestamps (`tar -m`).
 - `pkill -f pattern` kills the calling shell if its command line contains the pattern.
