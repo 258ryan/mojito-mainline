@@ -1,18 +1,42 @@
 # postmarketOS on the Xiaomi Redmi Note 10 (mojito / sunny)
 
-Two ports for the Redmi Note 10 (Qualcomm SM6150, Adreno 612):
+Qualcomm SM6150 (Snapdragon 678), Adreno 612.
 
-- **`downstream/`** works: Xiaomi's 4.14 kernel boots postmarketOS (OpenRC), SSH over USB, a text console on
-  the panel via kmscon, touch, buttons, vibrator, flashlight, battery readouts. No audio, modem, Wi-Fi or GPU.
-- **`mainline/`** is in progress: Linux 7.4-rc4 with a new `sm6150-xiaomi-mojito.dts` on top of mainline's
-  `talos.dtsi`. It boots to SSH and shows a login on the panel, the Adreno 612 renders through freedreno (off-screen), the
-  touchscreen works, the real display stack (DPU/DSI/panel with brightness control) works and Phosh runs; the goal is a KWin 6 / Qt 6 shell on it.
+## Mainline (`mainline/`): the active port
 
-Start with [`HANDOFF.md`](HANDOFF.md): status, every fix that was needed, the mainline boot experiments,
-next steps and the traps (read the NAT warning before giving the phone internet).
+Linux 7.4-rc4 with `sm6150-xiaomi-mojito.dts` on top of mainline's `talos.dtsi`, postmarketOS (OpenRC) and Phosh.
 
-No firmware, boot images or device dumps are included: vendor blobs are not redistributable and dumps carry
-device-unique identifiers. Extract firmware from your own phone's stock ROM (see `tools/lpunpack.py`).
+| Works | Not yet |
+|---|---|
+| Display with brightness and smooth dimming, touch, GPU, Phosh | Suspend (fix being tested) |
+| Wi-Fi, Bluetooth, mobile data | Calls |
+| Both speakers, main microphone | Headphones, second microphone |
+| Accelerometer, light sensor, compass | Camera, GPS, NFC, fingerprint |
+| Power and volume keys, vibrator | Charging from a PC USB port |
+| Wall charging, battery percentage | Full CPU top speed |
+
+It is a development port, not an installable image: there is no device package yet, and several pieces are set up by hand.
+
+## Downstream (`downstream/`)
+
+The earlier port on Xiaomi's 4.14 kernel: SSH over USB, a text console on the panel, touch, buttons, vibrator, flashlight and
+battery readouts. No audio, modem, Wi-Fi or GPU.
+
+## Layout
+
+| Path | What |
+|---|---|
+| [`HANDOFF.md`](HANDOFF.md) | current state, open problems, workflow, hazards: start here |
+| [`docs/HANDOFF-history.md`](docs/HANDOFF-history.md) | how each problem was found and fixed |
+| `mainline/sm6150-xiaomi-mojito.dts` | board device tree (source of kernel patch 0001) |
+| `mainline/linux-postmarketos-qcom-sm6150/` | kernel package and patches |
+| `mainline/rootfs/` | services, sound configuration and other files for the phone |
+| `mainline/hexagonrpc/` | patched DSP file server (needed for Wi-Fi and sensors) |
+| `mainline/mk-bootimg-v2.sh`, `mainline/build-dtb.sh` | boot image and quick device-tree builds |
+| `tools/` | install and debugging scripts |
+
+No firmware, boot images or device dumps are included: vendor files are not redistributable and dumps carry device-unique
+identifiers. Extract firmware from your own phone's stock ROM (see `tools/lpunpack.py`).
 
 ## Credits
 
@@ -21,6 +45,7 @@ device-unique identifiers. Extract firmware from your own phone's stock ROM (see
 - [xiaomi-sdm678](https://github.com/xiaomi-sdm678): downstream kernel source.
 - [VipinVIP/violet-sm6150-mainline](https://github.com/VipinVIP/violet-sm6150-mainline): mainline on the
   Redmi Note 7 Pro (same SoC); patches 0002 and 0003 come from there.
+- [linux-msm/hexagonrpc](https://github.com/linux-msm/hexagonrpc) (GPL-3.0).
 - postmarketOS / pmaports, and the upstream Linux Qualcomm maintainers for `talos.dtsi` and Adreno 612 support.
 
 Flashing can brick a phone. Keep a working slot and your stock fastboot ROM.

@@ -1,0 +1,25 @@
+From: postmarketOS mojito port
+Subject: [PATCH] misc: fastrpc: let the invoke wait be frozen across suspend
+
+The reverse-tunnel server (hexagonrpcd) is normally blocked in an invoke, waiting
+for the DSP. Freezing it for suspend interrupts the wait, the ioctl returns
+-ERESTARTSYS and is restarted, which sends the invoke to the DSP again while the
+first is outstanding. On the Redmi Note 10 the ADSP crashed right after every
+resume. Sleep in a freezable state so the freezer does not interrupt the task.
+---
+--- a/drivers/misc/fastrpc.c	2026-11-27 08:23:03.746770098 +0500
++++ b/drivers/misc/fastrpc.c	2026-11-27 08:23:03.764231255 +0500
+@@ -1328,7 +1328,12 @@
+ 		if (!wait_for_completion_timeout(&ctx->work, 10 * HZ))
+ 			err = -ETIMEDOUT;
+ 	} else {
+-		err = wait_for_completion_interruptible(&ctx->work);
++		/*
++		 * Freezable: a DSP listener sleeps here across system suspend. An interrupted
++		 * invoke is restarted, which sends the same message to the DSP a second time.
++		 */
++		err = wait_for_completion_state(&ctx->work,
++						TASK_INTERRUPTIBLE | TASK_FREEZABLE);
+ 	}
+ 
+ 	return err;

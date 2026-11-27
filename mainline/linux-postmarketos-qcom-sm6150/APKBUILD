@@ -50,6 +50,7 @@ source="
 	0017-ASoC-codecs-wcd937x-count-every-user-of-the-RX-clock.patch
 	0018-ASoC-codecs-lpass-rx-macro-set-the-AUX-DLY_Z-enable-bit.patch
 	0019-ASoC-codecs-wcd937x-make-the-RX-HPH-Mode-names-match-the-values.patch
+	0020-misc-fastrpc-let-the-invoke-wait-be-frozen-across-suspend.patch
 "
 builddir="$srcdir/linux-${pkgver/_/-}"
 
@@ -93,7 +94,7 @@ df2d9560c6da42cf3620d7abb6b4070c86165b46c6e686f94c4585fc3b887d30cc38550390b1be2d
 61202bda639a577e543975b72e66be7d0b49b0d2349b100fadfc9500e1c8059ef48b5156fa7b83a7eca41d9b87752d210ae1e0a400a68374b32a4f9446ce5a3e  0002-firmware-qcom-tzmem-do-not-use-the-SHM-bridge-on-sm6150.patch
 278eecc64de52cf3fb75be386f8a6f947e9cf2e6a63a311647d63aa7ae5b4578446630ea381bbd74d52184db2f40342cfaa152d1fbb1dfbf4f30d12e0b5bdd97  0003-interconnect-qcom-qcs615-add-the-ACV-enable-mask.patch
 4a0379e92816d74b57f94d14baecf51dff71b28f05d1f4d01c81bb01cec7745d2973cc9ba542308490c4cecb318d86f227717be341b1e4c8fed7a5480d0dbb07  0004-Input-edt-ft5x06-read-all-10-points-on-the-FT5452.patch
-9c787462a2d2d8b45023e481f46e2ce6ea9be8a19d0ac67313986a45d61afa75b67a9d53d027ecd0342d88d24dc750c110d1cbeac93d5fcb500cb7a7e4802b33  0005-drm-panel-add-the-Xiaomi-Redmi-Note-10-mojito-k7-AMOLED-panel.patch
+488c9b01f52b5643e8e1986a9825a6ef00c41eab60ce8c3191d4cc401b98abf9910858ed7cc115bdac6f7b8bf74663cd627613399cea9a2e739b8e1e68c14aff  0005-drm-panel-add-the-Xiaomi-Redmi-Note-10-mojito-k7-AMOLED-panel.patch
 0b0e4203e3362e82aa3a0ed46fa2b16ce927f32e3b7b1cb345da83cf7e2553d1706e78339849785294779acdfa86dceb3bf3ea6df9cd5d7f936f7a07ad21a839  0006-iommu-arm-smmu-qcom-use-an-identity-domain-for-the-SM6150-MDSS.patch
 13f3830638290e112f2fd25e649edffd8814c81cfba1bf5c90c2ff5114272dd2dfae20f032f910f02b82f3209026188d60a2cef6aaa74275f58019d31f680485  0007-drm-msm-dpu-stop-the-bootloader-timing-engine-before-the-DSI-bring-up.patch
 b2f39baa56cdf3db26418f750eec820bcbeb7f7db559754d066ca701e82a5e71df68ca7d2eb1a9387be876b3636001bc0fd91a0711713a9301ed21820ea7ef38  0008-power-supply-add-the-Qualcomm-SMB5-charger-driver.patch
@@ -108,4 +109,5 @@ e48f9fa7e681bf297eeedeaae816a28044ce77d9ef47e264b79d60bc75bcbbffea093c588f16e19f
 9b6b0670fda6427064a029d632e11972a280628dcde94d92ea4749a841595cdb5f7da59ac3eaf526ab5da2bc3ace80c2af278961defd3c41468a36f51ea11101  0017-ASoC-codecs-wcd937x-count-every-user-of-the-RX-clock.patch
 fe45d9580689468da8a8655aa9377097f512d49e8fa047d8555403b0d6fe146a828e628fe384a80aab9192c3e291795905d0fb5edb99397c4e532aa7bd0e7197  0018-ASoC-codecs-lpass-rx-macro-set-the-AUX-DLY_Z-enable-bit.patch
 d7b28e122f11ccdcf38c3bd64fee877c3985af5892206b7eabe4d7373c549ccaf8a4d1710dcbf5abb30d0b50af62411d6f1bae3ba69f1b8de8fbeb6f7eeeb99c  0019-ASoC-codecs-wcd937x-make-the-RX-HPH-Mode-names-match-the-values.patch
+7c4d7477b82d751550b13e1e4a29aa2db3e3986d6a1538db126d42b37b810850e090a9592db5e48f9468fdd7dcaa37a353d1e76bf5f8a7395a32f8b56fd334aa  0020-misc-fastrpc-let-the-invoke-wait-be-frozen-across-suspend.patch
 "
