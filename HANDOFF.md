@@ -50,23 +50,56 @@ Item 3 VERIFIED (one run): 20 s s2idle with RTC wake: screen back, ADSP and mode
   48 kHz, RX topology default 0x10F77 (the vendor's fallback without calibration), routes, codec and amplifiers powered, the
   earpiece route plays media, every command accepted (the RX volume step is rejected). Tried without sound: RX default and
   none, 1/2 RX channels, stream and vocproc unmute, early and late start, the SDM845 driver's sequence by parameters.
-  Next: decode the stock calibration database (vendor /etc/acdbdata) for the topology IDs and tables, else record what
-  stock sends during a call.
-  Later (2026-11-28): the stock calibration database (vendor /etc/acdbdata/IDP) gives per-device voice topologies in
-  property 0x113af (what libaudcal's AcdbCmdGetVocProcCmnTopId reads): handset mic (device 4) 0x10000003, earpiece
-  (device 7) 0x1000fffd. Both are custom: rejected at topology commit until uploaded (`mainline/wip/calls/`). After the
-  upload the EARPIECE chain commits and the call runs with every command successful, but received audio is still silent; the
-  mic chain is still rejected (use SM_ECNS_V2). A failed commit leaves a stuck vocproc until reboot. A call can be set up
-  without calling: enable the two CS-Voice mixers and run aplay + arecord on hw:0,4. Also tried: media stream and route
-  off during the call. Remaining lead: the voice volume calibration table (stock registers it, then sets the volume step,
-  which is rejected without it), else record stock. The Pixel 3a (sdm670-mainline) selects database topologies in its UCM
-  profile; its IDs are not known to this firmware.
-  Module-only builds: no MODVERSIONS or signing, so `make M=sound/soc/qcom/qdsp6` in a patched tree with the package config.
+  Current state and next steps: "Calls: received audio (handoff)" below.
 - **Modem startup stall still happens** on r40/r41 (`packet before probe, dropped`, then the watchdog at ~50 s; it
   recovers). Patch 0021 is therefore incomplete.
 - **Pressing the power button restarted the phone** (GNOME's default is suspend). Likely suspend/resume; not confirmed.
 - Camera: `mainline/wip/camera/mojito-camera-probe.dts` (untested) describes the ultrawide IMX355 in slots 3 and 4;
   `CONFIG_VIDEO_IMX355=m` since r41. Stock module files decoded: address 0x1a, 19.2 MHz, 4 lanes, one switched supply.
+
+## Calls: received audio (handoff, 2026-11-28)
+
+Goal: hear the other side. Calls connect and the microphone is heard; the earpiece stays silent.
+
+**Proven**
+- The earpiece path works during a call: tones played on the "Voice Call" earpiece sink in a live call were heard, so the
+  AFE port (RX_CODEC_DMA_RX_0, 0xB030), codec and amplifier are fine. Not proven: that the voice processor feeds that port.
+- A test build registers everything below with every command successful, in real calls: custom topology upload (q6core
+  0x12924/0x12923; the variable-length list format), physical memory map on MVM (0x11334, table size 24, reply 0x11336),
+  stream calibration on CVS (0x11369), device config (0x11371), static (0x11373) and volume tables (0x1307B) on CVP, then
+  the RX volume step (0x112C2, rejected until the volume table was registered). Rejected here: 0x11374, 0x13079, 0x1307D.
+- Still silent with the stock earpiece chain 0x1000fffd + tables + volume step 4, with 2 RX channels and with 1.
+
+**Untried leads, in suggested order**
+1. Measure the downlink inside the DSP: host PCM tap (VSS_IVPCM_CMD_START_V2 0x11339, NOTIFY 0x1133B, PUSH_BUFFER 0x1133A;
+   vendor `asoc/msm-pcm-host-voice-v2.c` and `dsp/q6voice.c`), RX at stream and at vocproc; report only peak levels, record
+   no audio. Silent at both = the downlink never reaches the stream; sound then silence = the chain; sound at both = the
+   hand-over to the AFE port.
+2. AFE port channel count: stock sets `RX_CDC_DMA_RX_0 Channels = One` for the earpiece; with our UCM the media path uses
+   two. The vocproc was set to one, the port itself was not checked during a call.
+3. Smaller differences from the vendor `voc_start_voice_call`/`voice_setup_vocproc`: it sends the TTY mode
+   (VSS_ISTREAM_CMD_SET_TTY_MODE) and, only with more than one RX channel, a channel mixer + MFC config (we send neither).
+4. Record what stock Android sends during a call (APR trace).
+
+**Test build** (`mainline/wip/calls/q6voice-test-tree-on-r42.patch`, applies on kernel patches 0022-0031; module-only build:
+`make M=sound/soc/qcom/qdsp6` in a patched tree with the package config; no MODVERSIONS or signing). Before packaging:
+the memory map borrows the q6asm-dais SMMU device (workaround), tables are loaded as files, firmware names are
+hard-coded, and `calibrate` defaults to on.
+- Files it reads from /lib/firmware (generated on the owner's machine from the stock database, vendor data, never commit):
+  `mojito-voice-{columns,stream,devcfg,static,volume}.bin` for TX device 4 / RX device 7, and a topology list.
+- How the tables were made: Qualcomm's `libaudcal.so` (vendor image) loaded by a small static aarch64 loader under
+  qemu-aarch64, `acdb_ioctl` initialise 0x1138C, then 0x13097/6 static, 0x13095/4 "dynamic" (= volume), 0x11397 device
+  config, 0x13099/8 stream, 0x1309A column info (324 bytes). Loader kept privately.
+- Topology IDs come from database property 0x113af: earpiece (7) 0x1000fffd (works after upload), handset mic (4)
+  0x10000003 (still rejected at commit; the mic uses SM_ECNS_V2 0x10F89, one channel).
+
+**Runtime recipe** (as root, after each boot): write the topology file name to
+`/sys/module/q6core/parameters/register_topologies` (a second write fails, harmlessly); `echo 268500989 >
+/sys/module/q6cvp/parameters/rx_topology`; `echo 1 >` q6cvp `rx_channels` and `rx_speakers`; `echo 4 >
+/sys/module/q6voice/parameters/volume_step`. Call-free test: enable the mixers `RX_CODEC_DMA_RX_0 Voice Mixer CS-Voice`
+and `CS-Voice Capture Mixer TX_CODEC_DMA_TX_3`, run `aplay` and `arecord` on hw:0,4 together for 3 s, read dmesg with
+dynamic debug on the q6voice modules (aplay's own parameter errors are harmless). A failed topology commit leaves a stuck
+session until reboot: judge each ID on a clean boot.
 
 ## Open problems, most useful first
 
@@ -109,7 +142,7 @@ Item 3 VERIFIED (one run): 20 s s2idle with RTC wake: screen back, ADSP and mode
    clocks off; the UART clock chain is identical). Suspects: baud switch / flow control on the QUP UART.
 8. `modprobe -r hci_uart` after such a failure oopses (NULL in `tty_lock` from `ttyport_close` <- `serdev_device_close`
    <- `hci_uart_unregister_device` <- `qca_serdev_remove`): upstream bug, closing an already closed serdev port.
-9. Calls (q6voiced and surya's q6voice patches), mic noise (retest in a quiet room; speaker amps ruled out), second mic
+9. Calls: received audio silent (see the calls handoff above). Mic noise (retest in a quiet room; speaker amps ruled out), second mic
    (needs `qcom,tx-channel-mapping` and probably driver work).
 
 ## Speakers: bottom speaker silent after boot (FIXED 2026-11-27, kernel pkgrel=34)

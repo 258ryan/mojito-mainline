@@ -1,0 +1,492 @@
+WIP, not a package patch. Everything in the test build of 2026-11-28 on top of kernel patches 0022-0031: topology
+upload in q6core and registration of the voice calibration tables (it supersedes q6core-register-topologies.patch).
+Received call audio is still silent with it. No vendor data: tables are read from /lib/firmware.
+
+ sound/soc/qcom/qdsp6/q6core.c         | 166 +++++++++++++++++++++++++++++
+ sound/soc/qcom/qdsp6/q6voice-cal.h    |   6 ++
+ sound/soc/qcom/qdsp6/q6voice-common.c |  10 ++
+ sound/soc/qcom/qdsp6/q6voice-common.h |   1 +
+ sound/soc/qcom/qdsp6/q6voice.c        | 193 +++++++++++++++++++++++++++++++++-
+ 5 files changed, 375 insertions(+), 1 deletion(-)
+
+diff --git a/sound/soc/qcom/qdsp6/q6core.c b/sound/soc/qcom/qdsp6/q6core.c
+index 4882575..2abbe43 100644
+--- a/sound/soc/qcom/qdsp6/q6core.c
++++ b/sound/soc/qcom/qdsp6/q6core.c
+@@ -10,6 +10,11 @@
+ #include <linux/of.h>
+ #include <linux/of_platform.h>
+ #include <linux/jiffies.h>
++#include <linux/dma-mapping.h>
++#include <linux/firmware.h>
++#include <linux/of_platform.h>
++#include <linux/platform_device.h>
++#include <linux/moduleparam.h>
+ #include <linux/soc/qcom/apr.h>
+ #include "q6core.h"
+ #include "q6dsp-errno.h"
+@@ -22,6 +27,10 @@
+ #define AVCS_GET_VERSIONS_RSP   0x00012906
+ #define AVCS_CMD_GET_FWK_VERSION	0x001292c
+ #define AVCS_CMDRSP_GET_FWK_VERSION	0x001292d
++#define AVCS_CMD_REGISTER_TOPOLOGIES		0x00012923
++#define AVCS_CMD_SHARED_MEM_MAP_REGIONS		0x00012924
++#define AVCS_CMDRSP_SHARED_MEM_MAP_REGIONS	0x00012925
++#define AVCS_CMD_SHARED_MEM_UNMAP_REGIONS	0x00012926
+ 
+ struct avcs_svc_info {
+ 	uint32_t service_id;
+@@ -63,6 +72,10 @@ struct q6core {
+ 	bool get_state_supported;
+ 	bool get_version_supported;
+ 	bool is_version_requested;
++	/* topology upload: the reply of the command under way */
++	bool topo_done;
++	uint32_t topo_status;
++	uint32_t topo_handle;
+ };
+ 
+ static struct q6core *g_core;
+@@ -75,9 +88,22 @@ static int q6core_callback(struct apr_device *adev, const struct apr_resp_pkt *d
+ 
+ 	result = data->payload;
+ 	switch (hdr->opcode) {
++	case AVCS_CMDRSP_SHARED_MEM_MAP_REGIONS:
++		core->topo_handle = *(const uint32_t *)data->payload;
++		core->topo_status = 0;
++		core->topo_done = true;
++		wake_up(&core->wait);
++		break;
+ 	case APR_BASIC_RSP_RESULT:{
+ 		result = data->payload;
+ 		switch (result->opcode) {
++		case AVCS_CMD_SHARED_MEM_MAP_REGIONS:
++		case AVCS_CMD_REGISTER_TOPOLOGIES:
++		case AVCS_CMD_SHARED_MEM_UNMAP_REGIONS:
++			core->topo_status = result->status;
++			core->topo_done = true;
++			wake_up(&core->wait);
++			break;
+ 		case AVCS_GET_VERSIONS:
+ 			if (result->status == ADSP_EUNSUPPORTED)
+ 				core->get_version_supported = false;
+@@ -325,6 +351,146 @@ bool q6core_is_adsp_ready(void)
+ }
+ EXPORT_SYMBOL_GPL(q6core_is_adsp_ready);
+ 
++struct avcs_cmd_map {
++	struct apr_hdr hdr;
++	uint16_t mem_pool_id;
++	uint16_t num_regions;
++	uint32_t property_flag;
++	uint32_t addr_lsw;
++	uint32_t addr_msw;
++	uint32_t size;
++} __packed;
++
++struct avcs_cmd_register {
++	struct apr_hdr hdr;
++	uint32_t addr_lsw;
++	uint32_t addr_msw;
++	uint32_t handle;
++	uint32_t size;
++} __packed;
++
++struct avcs_cmd_unmap {
++	struct apr_hdr hdr;
++	uint32_t handle;
++} __packed;
++
++static int q6core_topo_send(struct q6core *core, struct apr_hdr *hdr, uint32_t opcode, int size)
++{
++	int ret;
++
++	hdr->hdr_field = APR_HDR_FIELD(APR_MSG_TYPE_SEQ_CMD, APR_HDR_LEN(APR_HDR_SIZE), APR_PKT_VER);
++	hdr->pkt_size = size;
++	hdr->src_port = 0;
++	hdr->dest_port = 0;
++	hdr->token = 0;
++	hdr->opcode = opcode;
++	core->topo_done = false;
++	core->topo_status = 0;
++
++	ret = apr_send_pkt(core->adev, (struct apr_pkt *)hdr);
++	if (ret < 0)
++		return ret;
++	if (!wait_event_timeout(core->wait, core->topo_done, msecs_to_jiffies(1000)))
++		return -ETIMEDOUT;
++	if (core->topo_status) {
++		dev_err(&core->adev->dev, "topology upload: command %#x failed with error %u\n", opcode, core->topo_status);
++		return -EIO;
++	}
++	return 0;
++}
++
++/*
++ * Give the DSP custom processing chains (AVCS_CMD_REGISTER_TOPOLOGIES), read from a file the owner of the phone extracts
++ * from the stock calibration database. TEST: the buffer is mapped through the ASM DAI device's SMMU stream, which this
++ * service has none of its own.
++ */
++static int q6core_register_topologies(const char *name)
++{
++	struct q6core *core = g_core;
++	const struct firmware *fw;
++	struct device_node *np;
++	struct platform_device *asm_pdev = NULL;
++	struct of_phandle_args args;
++	struct avcs_cmd_map map = {};
++	struct avcs_cmd_register reg = {};
++	struct avcs_cmd_unmap unmap = {};
++	dma_addr_t dma;
++	u64 phys;
++	void *buf;
++	size_t len;
++	int ret;
++
++	if (!core)
++		return -ENODEV;
++
++	ret = request_firmware(&fw, name, &core->adev->dev);
++	if (ret)
++		return ret;
++	if (!fw->size || fw->size > SZ_64K) {
++		ret = -EINVAL;
++		goto release;
++	}
++
++	np = of_find_compatible_node(NULL, NULL, "qcom,q6asm-dais");
++	if (np)
++		asm_pdev = of_find_device_by_node(np);
++	if (!asm_pdev || of_parse_phandle_with_fixed_args(np, "iommus", 1, 0, &args)) {
++		ret = -ENODEV;
++		goto put;
++	}
++	of_node_put(args.np);
++
++	len = PAGE_ALIGN(fw->size);
++	buf = dma_alloc_coherent(&asm_pdev->dev, len, &dma, GFP_KERNEL);
++	if (!buf) {
++		ret = -ENOMEM;
++		goto put;
++	}
++	memcpy(buf, fw->data, fw->size);
++	phys = dma | ((u64)(args.args[0] & 0xf) << 32);
++
++	mutex_lock(&core->lock);
++	map.mem_pool_id = 3;	/* shared memory, 8-byte, 4K pool */
++	map.num_regions = 1;
++	map.addr_lsw = lower_32_bits(phys);
++	map.addr_msw = upper_32_bits(phys);
++	map.size = len;
++	ret = q6core_topo_send(core, &map.hdr, AVCS_CMD_SHARED_MEM_MAP_REGIONS, sizeof(map));
++	if (!ret) {
++		reg.addr_lsw = map.addr_lsw;
++		reg.addr_msw = map.addr_msw;
++		reg.handle = core->topo_handle;
++		reg.size = fw->size;
++		unmap.handle = core->topo_handle;
++		ret = q6core_topo_send(core, &reg.hdr, AVCS_CMD_REGISTER_TOPOLOGIES, sizeof(reg));
++		q6core_topo_send(core, &unmap.hdr, AVCS_CMD_SHARED_MEM_UNMAP_REGIONS, sizeof(unmap));
++	}
++	mutex_unlock(&core->lock);
++
++	dma_free_coherent(&asm_pdev->dev, len, buf, dma);
++	if (!ret)
++		dev_info(&core->adev->dev, "registered the topologies in %s (%zu bytes)\n", name, fw->size);
++put:
++	if (asm_pdev)
++		put_device(&asm_pdev->dev);
++	of_node_put(np);
++release:
++	release_firmware(fw);
++	return ret;
++}
++
++static int register_topologies_set(const char *val, const struct kernel_param *kp)
++{
++	char name[128];
++
++	strscpy(name, val, sizeof(name));
++	return q6core_register_topologies(strim(name));
++}
++
++static const struct kernel_param_ops register_topologies_ops = { .set = register_topologies_set };
++module_param_cb(register_topologies, &register_topologies_ops, NULL, 0200);
++MODULE_PARM_DESC(register_topologies, "write a firmware file name to upload its custom topologies to the DSP");
++
+ static int q6core_probe(struct apr_device *adev)
+ {
+ 	g_core = kzalloc_obj(*g_core);
+diff --git a/sound/soc/qcom/qdsp6/q6voice-cal.h b/sound/soc/qcom/qdsp6/q6voice-cal.h
+new file mode 100644
+index 0000000..060e640
+--- /dev/null
++++ b/sound/soc/qcom/qdsp6/q6voice-cal.h
+@@ -0,0 +1,6 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++struct q6voice_cal;
++
++struct q6voice_cal *q6voice_cal_register(struct device *dev, struct q6voice_session *mvm, struct q6voice_session *cvs,
++					 struct q6voice_session *cvp);
++void q6voice_cal_release(struct q6voice_cal *cal, struct q6voice_session *mvm);
+diff --git a/sound/soc/qcom/qdsp6/q6voice-common.c b/sound/soc/qcom/qdsp6/q6voice-common.c
+index 366686f..eef7f3b 100644
+--- a/sound/soc/qcom/qdsp6/q6voice-common.c
++++ b/sound/soc/qcom/qdsp6/q6voice-common.c
+@@ -170,6 +170,16 @@ static void q6voice_session_callback(struct q6voice_session *s,
+ 	struct aprv2_ibasic_rsp_result_t *result = data->payload;
+ 	unsigned long flags;
+ 
++	if (data->hdr.opcode == 0x00011336) {	/* VSS_IMEMORY_RSP_MAP: the handle */
++		spin_lock_irqsave(&s->lock, flags);
++		s->map_handle = *(const u32 *)data->payload;
++		s->result = 0;
++		s->expected_opcode = 0;
++		spin_unlock_irqrestore(&s->lock, flags);
++		wake_up(&s->wait);
++		return;
++	}
++
+ 	if (data->hdr.opcode != APR_BASIC_RSP_RESULT)
+ 		return; /* Not handled here */
+ 
+diff --git a/sound/soc/qcom/qdsp6/q6voice-common.h b/sound/soc/qcom/qdsp6/q6voice-common.h
+index 8eb22df..633b786 100644
+--- a/sound/soc/qcom/qdsp6/q6voice-common.h
++++ b/sound/soc/qcom/qdsp6/q6voice-common.h
+@@ -28,6 +28,7 @@ struct q6voice_session {
+ 	spinlock_t lock;
+ 	u32 expected_opcode;
+ 	u32 result;
++	u32 map_handle;	/* from the last VSS_IMEMORY_RSP_MAP */
+ };
+ 
+ int q6voice_common_probe(struct apr_device *adev, enum q6voice_service_type type);
+diff --git a/sound/soc/qcom/qdsp6/q6voice.c b/sound/soc/qcom/qdsp6/q6voice.c
+index 9a80cfc..fab39c0 100644
+--- a/sound/soc/qcom/qdsp6/q6voice.c
++++ b/sound/soc/qcom/qdsp6/q6voice.c
+@@ -12,9 +12,16 @@
+ #include "q6cvs.h"
+ #include "q6mvm.h"
+ #include "q6voice-common.h"
++#include <linux/dma-mapping.h>
++#include <linux/firmware.h>
++#include <linux/of.h>
++#include <linux/of_platform.h>
++#include <linux/platform_device.h>
++#include "q6voice-cal.h"
+ 
+ struct q6voice_path_runtime {
+ 	struct q6voice_session *sessions[Q6VOICE_SERVICE_COUNT];
++	struct q6voice_cal *cal;
+ 	unsigned int started;
+ };
+ 
+@@ -45,6 +52,183 @@ module_param(device_unmute, bool, 0644);
+ static int volume_step = -1;	/* -1: do not set (rejected without calibration data) */
+ module_param(volume_step, int, 0644);
+ 
++/*
++ * TEST: calibration tables for the call, generated by the phone's owner from the stock database (files in /lib/firmware,
++ * never part of any repository) and registered with the voice services as the vendor driver does.
++ */
++static bool calibrate = true;
++module_param(calibrate, bool, 0644);
++
++#define VSS_IMEMORY_CMD_MAP_PHYSICAL			0x00011334
++#define VSS_IMEMORY_CMD_UNMAP				0x00011337
++#define VSS_ISTREAM_CMD_REGISTER_CALIBRATION_DATA_V2	0x00011369
++#define VSS_ISTREAM_CMD_REGISTER_STATIC_CALIBRATION_DATA 0x0001307D /* not accepted here */
++#define VSS_IVOCPROC_CMD_REGISTER_DEVICE_CONFIG		0x00011371
++#define VSS_IVOCPROC_CMD_REGISTER_CALIBRATION_DATA_V2	0x00011373
++#define VSS_IVOCPROC_CMD_REGISTER_VOL_CALIBRATION_DATA	0x00011374
++#define VSS_IVOCPROC_CMD_REGISTER_STATIC_CALIBRATION_DATA 0x00013079
++#define VSS_IVOCPROC_CMD_REGISTER_DYNAMIC_CALIBRATION_DATA 0x0001307B
++#define CAL_COLUMNS	324
++#define CAL_SIZE	SZ_128K
++
++struct vss_map_physical_cmd {
++	struct apr_hdr hdr;
++	u32 table_lsw, table_msw, table_size;
++	u8 is_cached;
++	u16 cache_line_size;
++	u32 access_mask;
++	u32 page_align;
++	u8 min_data_width;
++	u8 max_data_width;
++} __packed;
++
++struct vss_unmap_cmd {
++	struct apr_hdr hdr;
++	u32 handle;
++} __packed;
++
++struct vss_register_cmd {
++	struct apr_hdr hdr;
++	u32 handle, addr_lsw, addr_msw, size;
++	u8 columns[CAL_COLUMNS];	/* not sent with the device configuration */
++} __packed;
++
++struct q6voice_cal {
++	struct device *dma_dev;
++	void *buf;
++	dma_addr_t dma;
++	u64 phys;
++	u32 handle;
++};
++
++static int q6voice_cal_one(struct device *dev, struct q6voice_cal *cal, struct q6voice_session *s, const char *name,
++			   u32 opcode, size_t offset, const struct firmware *columns)
++{
++	struct vss_register_cmd *cmd;
++	const struct firmware *fw;
++	int ret;
++
++	ret = request_firmware(&fw, name, dev);
++	if (ret)
++		return ret;
++	if (offset + fw->size > CAL_SIZE) {
++		release_firmware(fw);
++		return -E2BIG;
++	}
++	memcpy(cal->buf + offset, fw->data, fw->size);
++
++	cmd = kzalloc(sizeof(*cmd), GFP_KERNEL);
++	if (!cmd) {
++		release_firmware(fw);
++		return -ENOMEM;
++	}
++	cmd->hdr.opcode = opcode;
++	cmd->hdr.pkt_size = columns ? sizeof(*cmd) : offsetof(struct vss_register_cmd, columns);
++	cmd->handle = cal->handle;
++	cmd->addr_lsw = lower_32_bits(cal->phys + offset);
++	cmd->addr_msw = upper_32_bits(cal->phys + offset);
++	cmd->size = fw->size;
++	if (columns)
++		memcpy(cmd->columns, columns->data, min_t(size_t, columns->size, CAL_COLUMNS));
++	ret = q6voice_common_send(s, &cmd->hdr);
++	dev_info(dev, "calibration %s (%zu bytes, command %#x): %d\n", name, fw->size, opcode, ret);
++	kfree(cmd);
++	release_firmware(fw);
++	return ret;
++}
++
++struct q6voice_cal *q6voice_cal_register(struct device *dev, struct q6voice_session *mvm, struct q6voice_session *cvs,
++					 struct q6voice_session *cvp)
++{
++	struct vss_map_physical_cmd map = {};
++	const struct firmware *columns;
++	struct platform_device *pdev = NULL;
++	struct of_phandle_args args;
++	struct device_node *np;
++	struct q6voice_cal *cal;
++	u32 *table;
++	int ret;
++
++	if (!calibrate || request_firmware(&columns, "mojito-voice-columns.bin", dev))
++		return NULL;
++	cal = kzalloc(sizeof(*cal), GFP_KERNEL);
++	if (!cal)
++		goto out;
++
++	/* TEST shortcut: memory mapped through the ASM DAI device's SMMU stream */
++	np = of_find_compatible_node(NULL, NULL, "qcom,q6asm-dais");
++	if (np)
++		pdev = of_find_device_by_node(np);
++	if (!pdev || of_parse_phandle_with_fixed_args(np, "iommus", 1, 0, &args))
++		goto fail;
++	of_node_put(args.np);
++	cal->dma_dev = &pdev->dev;
++	cal->buf = dma_alloc_coherent(cal->dma_dev, CAL_SIZE, &cal->dma, GFP_KERNEL);
++	if (!cal->buf)
++		goto fail;
++	cal->phys = cal->dma | ((u64)(args.args[0] & 0xf) << 32);
++
++	/* the first page: the table describing the block that follows it */
++	table = cal->buf;
++	table[3] = lower_32_bits(cal->phys + SZ_4K);
++	table[4] = upper_32_bits(cal->phys + SZ_4K);
++	table[5] = CAL_SIZE - SZ_4K;
++	map.hdr.opcode = VSS_IMEMORY_CMD_MAP_PHYSICAL;
++	map.hdr.pkt_size = sizeof(map);
++	map.table_lsw = lower_32_bits(cal->phys);
++	map.table_msw = upper_32_bits(cal->phys);
++	map.table_size = 24;	/* the next-table descriptor (12 bytes) and one block (12) */
++	map.is_cached = 1;
++	map.cache_line_size = 128;
++	map.access_mask = 3;
++	map.page_align = SZ_4K;
++	map.min_data_width = 8;
++	map.max_data_width = 64;
++	mvm->map_handle = 0;
++	ret = q6voice_common_send(mvm, &map.hdr);
++	dev_info(dev, "calibration memory map: %d, handle %#x\n", ret, mvm->map_handle);
++	if (ret || !mvm->map_handle)
++		goto free;
++	cal->handle = mvm->map_handle;
++
++	if (cvs)
++		q6voice_cal_one(dev, cal, cvs, "mojito-voice-stream.bin",
++				VSS_ISTREAM_CMD_REGISTER_CALIBRATION_DATA_V2, SZ_4K, columns);
++	q6voice_cal_one(dev, cal, cvp, "mojito-voice-devcfg.bin", VSS_IVOCPROC_CMD_REGISTER_DEVICE_CONFIG, SZ_8K, NULL);
++	q6voice_cal_one(dev, cal, cvp, "mojito-voice-static.bin",
++			VSS_IVOCPROC_CMD_REGISTER_CALIBRATION_DATA_V2, SZ_16K, columns);
++	q6voice_cal_one(dev, cal, cvp, "mojito-voice-volume.bin",
++			/* the stock "dynamic" table: only this command takes it (CVD 2.4) */
++			VSS_IVOCPROC_CMD_REGISTER_DYNAMIC_CALIBRATION_DATA, SZ_32K, columns);
++	goto out;
++free:
++	dma_free_coherent(cal->dma_dev, CAL_SIZE, cal->buf, cal->dma);
++fail:
++	if (pdev)
++		put_device(&pdev->dev);
++	kfree(cal);
++	cal = NULL;
++out:
++	release_firmware(columns);
++	return cal;
++}
++
++void q6voice_cal_release(struct q6voice_cal *cal, struct q6voice_session *mvm)
++{
++	struct vss_unmap_cmd unmap = {};
++
++	if (!cal)
++		return;
++	unmap.hdr.opcode = VSS_IMEMORY_CMD_UNMAP;
++	unmap.hdr.pkt_size = sizeof(unmap);
++	unmap.handle = cal->handle;
++	if (mvm)
++		q6voice_common_send(mvm, &unmap.hdr);
++	dma_free_coherent(cal->dma_dev, CAL_SIZE, cal->buf, cal->dma);
++	put_device(cal->dma_dev);
++	kfree(cal);
++}
++
+ static int q6voice_path_start(struct q6voice_path *p)
+ {
+ 	struct device *dev = p->v->dev;
+@@ -84,6 +268,9 @@ static int q6voice_path_start(struct q6voice_path *p)
+ 			dev_warn(dev, "failed to commit the voice processor's topology: %d\n", ret);
+ 	}
+ 
++	if (!p->runtime->cal)
++		p->runtime->cal = q6voice_cal_register(dev, mvm, p->runtime->sessions[Q6VOICE_SERVICE_CVS], cvp);
++
+ 	ret = q6cvp_enable(cvp, true);
+ 	if (ret) {
+ 		dev_err(dev, "failed to enable cvp: %d\n", ret);
+@@ -198,7 +385,11 @@ static void q6voice_path_destroy(struct q6voice_path *p)
+ 	struct q6voice_path_runtime *runtime = p->runtime;
+ 	enum q6voice_service_type svc;
+ 
+-	for (svc = 0; svc < Q6VOICE_SERVICE_COUNT; ++svc) {
++	for (svc = Q6VOICE_SERVICE_COUNT; svc-- > 0; ) {
++		if (svc == Q6VOICE_SERVICE_MVM) {	/* first in the list, so released last */
++			q6voice_cal_release(runtime->cal, runtime->sessions[svc]);
++			runtime->cal = NULL;
++		}
+ 		if (runtime->sessions[svc])
+ 			q6voice_session_release(runtime->sessions[svc]);
+ 	}
