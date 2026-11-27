@@ -3,7 +3,7 @@ maintainer=""
 _flavor="postmarketos-qcom-sm6150"
 pkgname=linux-$_flavor
 pkgver=7.4_rc4
-pkgrel=40
+pkgrel=42
 pkgdesc="Mainline kernel for SM6150 devices"
 arch="aarch64"
 _carch="arm64"
@@ -52,6 +52,16 @@ source="
 	0019-ASoC-codecs-wcd937x-make-the-RX-HPH-Mode-names-match-the-values.patch
 	0020-misc-fastrpc-let-the-invoke-wait-be-frozen-across-suspend.patch
 	0021-net-qrtr-smd-keep-packets-received-before-the-endpoint-is-registered.patch
+	0022-ASoC-qdsp6-Add-shared-session-management-for-q6voice-services.patch
+	0023-ASoC-qdsp6-Add-driver-for-Q6-Multimode-Voice-Manager-q6mvm.patch
+	0024-ASoC-qdsp6-Add-driver-for-Q6-Core-Voice-Processor-q6cvp.patch
+	0025-ASoC-qdsp6-Add-driver-for-Q6-Core-Voice-Stream-q6cvs.patch
+	0026-ASoC-qdsp6-Add-voice-call-functionality-in-Q6-Voice-driver.patch
+	0027-ASoC-qdsp6-Add-Q6-Voice-DAI-driver-v2-1.patch
+	0028-ASoC-qdsp6-q6voice-Add-getter-setter-for-rx-and-tx-ports.patch
+	0029-ASoC-qdsp6-q6voice-dai-Add-controls-for-voice-rx-and-tx-ports.patch
+	0030-ASoC-qdsp6-q6voice-dai-add-the-codec-DMA-ports-of-the-LPASS-macros.patch
+	0031-ASoC-qdsp6-q6voice-set-up-calls-on-voice-firmware-2.4.patch
 "
 builddir="$srcdir/linux-${pkgver/_/-}"
 
@@ -95,8 +105,8 @@ package() {
 
 sha512sums="
 df2d9560c6da42cf3620d7abb6b4070c86165b46c6e686f94c4585fc3b887d30cc38550390b1be2dccdafe226ad60f1e5604c080853c25da618a74d38bb75c28  linux-postmarketos-qcom-sm6150-v7.4-rc4.tar.gz
-49a6e38c7c371cb601dfccc742e6aec876df81d37fd150849b8f8932ba8e1f48777edeab87211e5443029bf7d9467120c582ffdee62986c0f3b96c02f026bba0  config-postmarketos-qcom-sm6150.aarch64
-d58714006ecad87de155d3512a4e0ec0a0874786b4eb2fa094e0c0fa641e47fc8e29d2de98f091039c0d4f7184e09f8eafef649bfcddaf35333424689faecd41  0001-arm64-dts-qcom-add-xiaomi-mojito.patch
+fc680cb1c7363e05e18083d911f50633e723cd5e59e1767463c1c4b06cf00d26bbf88d3d6fceff516482dbb8e51202947d09dac4f74ac20c4227d35cff743860  config-postmarketos-qcom-sm6150.aarch64
+9c7725f0441783d1f1b3645f1ee55d946945788dbc90ee3cac5e9a2f2fef3e5d4c6b5488fb54a9bb1377ca81b171ffa59d4b34e5d76e58af211486d7eb29b0db  0001-arm64-dts-qcom-add-xiaomi-mojito.patch
 61202bda639a577e543975b72e66be7d0b49b0d2349b100fadfc9500e1c8059ef48b5156fa7b83a7eca41d9b87752d210ae1e0a400a68374b32a4f9446ce5a3e  0002-firmware-qcom-tzmem-do-not-use-the-SHM-bridge-on-sm6150.patch
 278eecc64de52cf3fb75be386f8a6f947e9cf2e6a63a311647d63aa7ae5b4578446630ea381bbd74d52184db2f40342cfaa152d1fbb1dfbf4f30d12e0b5bdd97  0003-interconnect-qcom-qcs615-add-the-ACV-enable-mask.patch
 4a0379e92816d74b57f94d14baecf51dff71b28f05d1f4d01c81bb01cec7745d2973cc9ba542308490c4cecb318d86f227717be341b1e4c8fed7a5480d0dbb07  0004-Input-edt-ft5x06-read-all-10-points-on-the-FT5452.patch
@@ -117,4 +127,14 @@ fe45d9580689468da8a8655aa9377097f512d49e8fa047d8555403b0d6fe146a828e628fe384a80a
 d7b28e122f11ccdcf38c3bd64fee877c3985af5892206b7eabe4d7373c549ccaf8a4d1710dcbf5abb30d0b50af62411d6f1bae3ba69f1b8de8fbeb6f7eeeb99c  0019-ASoC-codecs-wcd937x-make-the-RX-HPH-Mode-names-match-the-values.patch
 7c4d7477b82d751550b13e1e4a29aa2db3e3986d6a1538db126d42b37b810850e090a9592db5e48f9468fdd7dcaa37a353d1e76bf5f8a7395a32f8b56fd334aa  0020-misc-fastrpc-let-the-invoke-wait-be-frozen-across-suspend.patch
 45607f88c6b092486b897a1e7ba8ef540454114df8b192185343dc179f560dd419fa139b07e992183f20e55d8c76c085d4d619d6376ffae1b5d4edbb7923d1bf  0021-net-qrtr-smd-keep-packets-received-before-the-endpoint-is-registered.patch
+bbfea15adb6294dda2e7a5f0b2191bd6851f0ed6511e559440e1a7ed865ea250b9b273f2264dc8def3757cef1c4b2c5eb2b04db7e9d161313f5c0c73978de194  0022-ASoC-qdsp6-Add-shared-session-management-for-q6voice-services.patch
+42c68bb1103d98d19f3aeaf06759c8e340e97dc01c4767b208c4b7eb7ebdec663387c20c2c3aa56accc8a939e8650e8595fc0526d52540e72acf5d7116d02531  0023-ASoC-qdsp6-Add-driver-for-Q6-Multimode-Voice-Manager-q6mvm.patch
+cbffd0807e28e148d89c5c7bd67f3b27141964d1d3e3cd0d787530514dbc269cd38338e68a62945d4d8635e9c3aaa30d8e091ab542f53feca892e9def595355a  0024-ASoC-qdsp6-Add-driver-for-Q6-Core-Voice-Processor-q6cvp.patch
+940fb178eb7fbe8ceae8b00283e087fded8a502e04cb5e00ae8e568c3f37f4da0406fc76218e1b9c2c2f12e3ecd7586b666643718840bd2a7c6cfe52b610e1c5  0025-ASoC-qdsp6-Add-driver-for-Q6-Core-Voice-Stream-q6cvs.patch
+3832c151ffee8068d9471fc01cc8d934efe28f2ac89dc63fa4035fc83bb5fb04818c117fd964b25ea327eb0d98b46d17f0f2b2513b0e73d5bda6fdd429226a6c  0026-ASoC-qdsp6-Add-voice-call-functionality-in-Q6-Voice-driver.patch
+b836f58be71a52b65a47b6db618b420b00e6863f909034ea66d9355321405c4c073cf2452ac656a936f1238c6d0f8cf9b7ccf62b90a76e86202c7b89028cf663  0027-ASoC-qdsp6-Add-Q6-Voice-DAI-driver-v2-1.patch
+74b8ca7e6f67a042d008e608df809f21735e61231eb7828bc330262bfc9f68b74c8660d51f8390023c51d973b94e54a1d544d868a53cd94c46eac79c4a74046d  0028-ASoC-qdsp6-q6voice-Add-getter-setter-for-rx-and-tx-ports.patch
+b9900c84f4904ea7b599dd5d173aa483bed85e59c52b4164e66b6fbef0c4cfef7ea92eded07263f8d1c684e2e8876bc1a7dba8e54b8733817401bae27aae7387  0029-ASoC-qdsp6-q6voice-dai-Add-controls-for-voice-rx-and-tx-ports.patch
+01102fcae04f3b44a02c2535fd6e88608d6c6216d19d54528e1516d71202dfc1c831fcd2c62050dbb9ce0af0c9c801871eaeea131d44b56dd93453b79102956c  0030-ASoC-qdsp6-q6voice-dai-add-the-codec-DMA-ports-of-the-LPASS-macros.patch
+cb3c1b67ac8600acf63afda1217ac9b5291c0176bde12e3969094646b8d40a7270da675a8a931dc208885649b7113f76e12d6fb707fb3732452a5eba131440db  0031-ASoC-qdsp6-q6voice-set-up-calls-on-voice-firmware-2.4.patch
 "

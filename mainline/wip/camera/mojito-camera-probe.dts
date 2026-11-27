@@ -1,0 +1,158 @@
+// SPDX-License-Identifier: BSD-3-Clause
+/*
+ * TEST ONLY, not part of the kernel package: find which camera slot holds the ultrawide IMX355.
+ *
+ * The stock module file gives address 0x1a, 19.2 MHz, 4 lanes and the order "reset low, interface supply, clock,
+ * reset high". Its slot is 3 or 4 (the other holds the macro, which answers at another address), so both are
+ * described, on their own CCI buses; the imx355 driver checks the chip ID, and only the right one binds.
+ * Wiring from the stock device tree:
+ *   slot 3: CCI master 1, MCLK3 (gpio31), reset gpio40, interface supply L13A, CSIPHY1 behind a switch
+ *           (select gpio94, enable gpio121: both low for this slot, as the ultrawide's power sequence sets them)
+ *   slot 4: CCI master 0, MCLK1 (gpio29), reset gpio45, supply switched by PM6150L GPIO4, CSIPHY2
+ * ASSUMED, to be proven by the test: which rail is analog and digital (stock switches only one per slot).
+ *
+ * Needs CONFIG_VIDEO_IMX355=m. Build: mainline/build-dtb.sh <linux-tree> camera.dtb mainline/wip/camera/mojito-camera-probe.dts
+ */
+#include "../../sm6150-xiaomi-mojito.dts"
+#include <dt-bindings/media/video-interface-devices.h>
+
+/ {
+	vreg_cam_a: regulator-camera-a {
+		compatible = "regulator-fixed";
+		regulator-name = "camera_vana1_2";
+		regulator-min-microvolt = <2850000>;
+		regulator-max-microvolt = <2850000>;
+		gpio = <&pm6150l_gpios 4 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		pinctrl-0 = <&cam_vana_default>;
+		pinctrl-names = "default";
+	};
+};
+
+&pm6150l_gpios {
+	cam_vana_default: cam-vana-state {
+		pins = "gpio4";
+		function = "normal";
+		power-source = <0>;
+		output-low;
+	};
+};
+
+&tlmm {
+	/* the CSIPHY1 switch, held on slot 3's side for this test (the front camera shares it) */
+	cam-switch-select-hog {
+		gpio-hog;
+		gpios = <94 GPIO_ACTIVE_HIGH>;
+		output-low;
+		line-name = "camera-switch-select";
+	};
+
+	cam-switch-enable-hog {
+		gpio-hog;
+		gpios = <121 GPIO_ACTIVE_HIGH>;
+		output-low;
+		line-name = "camera-switch-enable-n";
+	};
+
+	cam_slot3_default: cam-slot3-reset-state {
+		pins = "gpio40";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+	};
+
+	cam_slot4_default: cam-slot4-reset-state {
+		pins = "gpio45";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+	};
+};
+
+&camss {
+	vdd-csiphy-1p2-supply = <&vreg_l3c>;	/* stock: mipi-csi-vdd = pm6150l L3 */
+	vdd-csiphy-1p8-supply = <&vreg_l12a>;
+	status = "okay";
+
+	ports {
+		port@1 {
+			csiphy1_ep: endpoint {
+				data-lanes = <0 1 2 3>;
+				remote-endpoint = <&cam_slot3_ep>;
+			};
+		};
+
+		port@2 {
+			csiphy2_ep: endpoint {
+				data-lanes = <0 1 2 3>;
+				remote-endpoint = <&cam_slot4_ep>;
+			};
+		};
+	};
+};
+
+&cci {
+	status = "okay";
+};
+
+/* slot 4: CCI master 0 */
+&cci_i2c0 {
+	camera@1a {
+		compatible = "sony,imx355";
+		reg = <0x1a>;
+
+		clocks = <&camcc CAM_CC_MCLK1_CLK>;
+		assigned-clocks = <&camcc CAM_CC_MCLK1_CLK>;
+		assigned-clock-rates = <19200000>;
+
+		reset-gpios = <&tlmm 45 GPIO_ACTIVE_LOW>;
+		avdd-supply = <&vreg_cam_a>;
+		dvdd-supply = <&vreg_cam_a>;
+		dovdd-supply = <&vreg_l13a>;
+
+		pinctrl-0 = <&cam_mclk1_default &cam_slot4_default>;
+		pinctrl-names = "default";
+
+		rotation = <90>;
+		orientation = <MEDIA_ORIENTATION_BACK>;
+
+		port {
+			cam_slot4_ep: endpoint {
+				data-lanes = <1 2 3 4>;
+				link-frequencies = /bits/ 64 <360000000>;
+				remote-endpoint = <&csiphy2_ep>;
+			};
+		};
+	};
+};
+
+/* slot 3: CCI master 1 */
+&cci_i2c1 {
+	camera@1a {
+		compatible = "sony,imx355";
+		reg = <0x1a>;
+
+		clocks = <&camcc CAM_CC_MCLK3_CLK>;
+		assigned-clocks = <&camcc CAM_CC_MCLK3_CLK>;
+		assigned-clock-rates = <19200000>;
+
+		reset-gpios = <&tlmm 40 GPIO_ACTIVE_LOW>;
+		avdd-supply = <&vreg_cam_a>;
+		dvdd-supply = <&vreg_cam_a>;
+		dovdd-supply = <&vreg_l13a>;
+
+		pinctrl-0 = <&cam_mclk3_default &cam_slot3_default>;
+		pinctrl-names = "default";
+
+		rotation = <90>;
+		orientation = <MEDIA_ORIENTATION_BACK>;
+
+		port {
+			cam_slot3_ep: endpoint {
+				data-lanes = <1 2 3 4>;
+				link-frequencies = /bits/ 64 <360000000>;
+				remote-endpoint = <&csiphy1_ep>;
+			};
+		};
+	};
+};

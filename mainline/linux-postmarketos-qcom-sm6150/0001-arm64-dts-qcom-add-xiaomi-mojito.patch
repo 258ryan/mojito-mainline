@@ -16,7 +16,7 @@ diff -urN a/arch/arm64/boot/dts/qcom/Makefile b/arch/arm64/boot/dts/qcom/Makefil
  dtb-$(CONFIG_ARCH_QCOM)	+= sm6350-sony-xperia-lena-pdx213.dtb
 --- a/arch/arm64/boot/dts/qcom/sm6150-xiaomi-mojito.dts	1970-01-01 05:00:00.000000000 +0500
 +++ b/arch/arm64/boot/dts/qcom/sm6150-xiaomi-mojito.dts	2026-11-27 07:00:00.000000000 +0500
-@@ -0,0 +1,1800 @@
+@@ -0,0 +1,1833 @@
 +// SPDX-License-Identifier: BSD-3-Clause
 +/*
 + * Xiaomi Redmi Note 10 (mojito / sunny), SM6150 "Talos".
@@ -40,6 +40,7 @@ diff -urN a/arch/arm64/boot/dts/qcom/Makefile b/arch/arm64/boot/dts/qcom/Makefil
 +#include <dt-bindings/soc/qcom,apr.h>
 +#include <dt-bindings/sound/qcom,q6afe.h>
 +#include <dt-bindings/sound/qcom,q6asm.h>
++#include <dt-bindings/sound/qcom,q6voice.h>
 +#include "talos.dtsi"
 +#include "pm6150.dtsi"
 +#include "pm6150l.dtsi"
@@ -603,6 +604,30 @@ diff -urN a/arch/arm64/boot/dts/qcom/Makefile b/arch/arm64/boot/dts/qcom/Makefil
 +				#sound-dai-cells = <0>;
 +			};
 +		};
++
++		/* voice calls (patches 0022-0030): the ADSP connects the modem's audio to the codec ports */
++		service@9 {
++			compatible = "qcom,q6mvm";
++			reg = <APR_SVC_ADSP_MVM>;
++			qcom,protection-domain = "avs/audio", "msm/adsp/audio_pd";
++
++			q6voicedai: dais {
++				compatible = "qcom,q6voice-dais";
++				#sound-dai-cells = <1>;
++			};
++		};
++
++		service@a {
++			compatible = "qcom,q6cvs";
++			reg = <APR_SVC_ADSP_CVS>;
++			qcom,protection-domain = "avs/audio", "msm/adsp/audio_pd";
++		};
++
++		service@b {
++			compatible = "qcom,q6cvp";
++			reg = <APR_SVC_ADSP_CVP>;
++			qcom,protection-domain = "avs/audio", "msm/adsp/audio_pd";
++		};
 +	};
 +};
 +
@@ -855,6 +880,14 @@ diff -urN a/arch/arm64/boot/dts/qcom/Makefile b/arch/arm64/boot/dts/qcom/Makefil
 +				/* swr_tx has one dout port, so DAI 0 is playback-only; capture DAIs start at 1.
 +				 * With DAI 0 no master data port is set up and the mic records zeros. */
 +				sound-dai = <&wcd9375 1>, <&swr_tx 1>, <&lpass_tx_macro 0>;
++			};
++		};
++
++		cs-voice-dai-link {
++			link-name = "CS-Voice";
++
++			cpu {
++				sound-dai = <&q6voicedai CS_VOICE>;
 +			};
 +		};
 +	};
