@@ -756,7 +756,7 @@
 		compatible = "simple-battery";
 		device-chemistry = "lithium-ion-polymer";
 		voltage-min-design-microvolt = <3400000>;
-		voltage-max-design-microvolt = <4450000>;
+		voltage-max-design-microvolt = <4450000>; /* cell rating (stock qcom,max-voltage-uv); Android floats up to 4.47 V */
 		charge-full-design-microamp-hours = <5000000>;
 		constant-charge-current-max-microamp = <2000000>;	/* conservative; vendor uses up to 6 A with the bq2597x pump */
 		factory-internal-resistance-micro-ohms = <120000>;

@@ -15,7 +15,7 @@ diff -urN a/arch/arm64/boot/dts/qcom/Makefile b/arch/arm64/boot/dts/qcom/Makefil
  dtb-$(CONFIG_ARCH_QCOM)	+= sm6125-xiaomi-willow.dtb
  dtb-$(CONFIG_ARCH_QCOM)	+= sm6350-sony-xperia-lena-pdx213.dtb
 --- a/arch/arm64/boot/dts/qcom/sm6150-xiaomi-mojito.dts	1970-01-01 05:00:00.000000000 +0500
-+++ b/arch/arm64/boot/dts/qcom/sm6150-xiaomi-mojito.dts	2026-11-27 04:30:00.000000000 +0500
++++ b/arch/arm64/boot/dts/qcom/sm6150-xiaomi-mojito.dts	2026-11-27 05:30:00.000000000 +0500
 @@ -0,0 +1,1156 @@
 +// SPDX-License-Identifier: BSD-3-Clause
 +/*
@@ -775,7 +775,7 @@ diff -urN a/arch/arm64/boot/dts/qcom/Makefile b/arch/arm64/boot/dts/qcom/Makefil
 +		compatible = "simple-battery";
 +		device-chemistry = "lithium-ion-polymer";
 +		voltage-min-design-microvolt = <3400000>;
-+		voltage-max-design-microvolt = <4450000>;
++		voltage-max-design-microvolt = <4450000>; /* cell rating (stock qcom,max-voltage-uv); Android floats up to 4.47 V */
 +		charge-full-design-microamp-hours = <5000000>;
 +		constant-charge-current-max-microamp = <2000000>;	/* conservative; vendor uses up to 6 A with the bq2597x pump */
 +		factory-internal-resistance-micro-ohms = <120000>;

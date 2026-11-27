@@ -49,6 +49,10 @@ Lessons (each cost a freeze/boot):
 - Rotation: upright reported `bottom-up` without a mount matrix; `rootfs/usr/lib/udev/rules.d/81-libssc-xiaomi-mojito.rules`
   (Y,Z inverted) was written and tested once, then parked as `/root/81-libssc-xiaomi-mojito.rules.off` on the phone during the freeze
   hunt. It was not the cause: re-test and re-enable.
+- **"battery over-voltage" dmesg flood** (charger, patch 0008): not an interrupt (bat-ov IRQ count 0) but the health getter printing
+  each time UPower polls, while BATTERY_CHARGER_STATUS_2 has BAT_OV set. That happens when the battery sits above our 4.45 V float,
+  e.g. after Android charged it to its 4.47 V (`qcom,fv-max-uv`). The cell rating is 4.45 V (`qcom,max-voltage-uv`, both cell
+  vendors), so the float stays 4.45 V; the getter now reports POWER_SUPPLY_HEALTH_OVERVOLTAGE silently (in r25, unbuilt).
 - Repeated forced resets mark slot B unbootable (`fastboot getvar slot-unbootable:b` = yes, retry 0): `fastboot set_active b`.
   Permanent fix: install `qbootctl` + `qbootctl-openrc` (marks the boot successful; the install hit DNS errors, not done yet).
 - **Sensors now work as a side effect:** with the sensor PD served, iio-sensor-proxy (libssc) reports an accelerometer and ambient
