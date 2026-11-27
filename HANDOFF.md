@@ -24,6 +24,9 @@ and service start times of good and bad boots.
   disp_cc_mdss_*), `ipa`, LPASS MI2S/TDM ids, rf_clk*/ln_bb_clk*, UFS/USB phy symbol and clkref clocks; full dump
   `clk_summary-r28.txt` in the private audio-speaker folder. Genpd: only the MMU TBU vote GDSCs are on without a user.
   Next: remove one flag at a time from the boot cmdline and keep the previous boot image for rollback.
+- `pd_ignore_unused` REMOVED (mk-bootimg-v2.sh; phone boot_b = `r28/boot_b-r28-nopd.img`, rollback `r28/boot_b-r28.img`). One boot
+  checked: genpd disabled unused domains at 1 s; display, USB, Wi-Fi (16 s), BT, modem data, sound card and sensors fine, no
+  errors. `clk_ignore_unused` is still there.
 
 ### Workarounds to replace (user wants as few as possible)
 No device package (hand-copied files, borrowed downstream initramfs); hexagonrpcd patch discards writes (should store them);

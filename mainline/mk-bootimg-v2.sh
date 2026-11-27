@@ -40,7 +40,7 @@ fdtput -t x "$TMPDTB" / qcom,msm-id 0x163 0x0
 fdtput -t x "$TMPDTB" / qcom,board-id 0x22 0x0
 echo "dtb: msm-id=$(fdtget -t x "$TMPDTB" / qcom,msm-id) board-id=$(fdtget -t x "$TMPDTB" / qcom,board-id)"
 
-CMDLINE="console=tty0 loglevel=7 clk_ignore_unused pd_ignore_unused pmos_boot_uuid=$PMOS_BOOT_UUID pmos_root_uuid=$PMOS_ROOT_UUID pmos_rootfsopts=defaults ${CMDLINE_EXTRA:-}"
+CMDLINE="console=tty0 loglevel=7 clk_ignore_unused pmos_boot_uuid=$PMOS_BOOT_UUID pmos_root_uuid=$PMOS_ROOT_UUID pmos_rootfsopts=defaults ${CMDLINE_EXTRA:-}"
 
 $MKBOOTIMG \
 	--kernel "$IMG" \
