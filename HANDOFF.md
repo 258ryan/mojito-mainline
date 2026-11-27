@@ -116,6 +116,21 @@ firmware partitions and must not be published as is.
   Next: take every public file from the official ROM images (NON-HLOS.bin, BTFM.bin, dspso.bin, vendor), re-test, then
   the user decides where to host it (public repo of blobs, as other pmOS ports do, or extraction from the ROM at build).
 
+## Camera, GPS, NFC, fingerprint, PC charging: assessment (2026-11-27)
+
+- Camera: the SoC part is upstream already: 7.4-rc4 has SM6150 CAMSS (csiphy/csid/vfe_res_sm6150, VFE 170) and talos.dtsi
+  has `camss: isp@acb3000` (`qcom,sm6150-camss`). Stock modules (camera dump): wide Sony IMX582 (no mainline driver),
+  ultrawide Sony IMX355 (driver has `sony,imx355` OF match + binding: DT nodes only), front OmniVision OV13B10 (driver is
+  ACPI-only: needs OF match + clock), macro GC02M1 / depth GC02M1B or OV02B1B (no drivers). First target: ultrawide via DT
+  (CCI bus, regulators, MCLK, reset GPIO, CSI-PHY lanes from the stock DT), then libcamera (CAMSS + software ISP).
+- GPS: modem QMI location service 16 is up; ModemManager offers gps-raw/nmea/agps, but enabling fails:
+  "Couldn't start GPS engine: QMI protocol error (46): GeneralError". Next: QMI LOC engine lock / NV settings.
+- NFC: stock DT has `st,st21nfc` at i2c a84000 (0x08) with rpmh clock 4 (LN_BB_CLK3?); mainline ST NCI drivers to check.
+- Fingerprint: runs in a TrustZone app (fpctzapp, QSEECOM): no mainline path.
+- PC charging: on a PC port the charger detects SDP and limits input to 450 mA (correct for USB 2). Not testable at 100 %:
+  retest at 50-80 % (current should reach ~450 mA). `health=Over voltage` with VBAT 4.444 V below the 4.45 V float: the
+  BAT_OV bit stays set after a battery was above float (driver comment); stock floats to 4.47 V (qcom,fv-max-uv).
+
 ## CPU speed and throttling (done in pkgrel=30, DTS only)
 
 The cpufreq hardware table offers 1017.6 / 1708.8 MHz (little) and 2016 / 2112 / 2208 MHz (big) that `talos.dtsi`
