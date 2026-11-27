@@ -93,10 +93,17 @@ U-Boot problems found:
    `dwc3_gadget_ep_dequeue` path). Never put `timeout` around `fastboot oem` commands.
 4. Stock 1 KiB pre-relocation console record buffer overflows; `mojito.config` enlarges it.
 
-Next: choose extlinux.conf (U-Boot native, `deviceinfo_generate_extlinux_config`) or EFI + systemd-boot (`boot-deploy`
-supports both; kernel has the EFI stub; ESP is ext4 today). Then a bootcmd that sets up the blkmap from `part start/size`
-and runs standard boot on it, put the mainline kernel/DTB in `/boot`, flash U-Boot to `boot_b` (keep a kernel boot image
-for rollback), and add it to the `mojito-device` package.
+**EFI + systemd-boot chain works** (user's choice over extlinux), RAM-booted U-Boot `efi1`, 2026-11-27:
+ABL -> U-Boot (`preboot` runs `mojito_blkmap`: finds `userdata` by name with `part start/size`, maps it as `blkmap 0`)
+-> `bootefi bootmgr` finds `EFI/BOOT/BOOTAA64.EFI` on the nested boot partition (ext4 works with U-Boot's EFI file
+protocol) -> systemd-boot 262.2 -> loader entry -> Linux via the EFI stub (`efi: EFI v2.11 by Das U-Boot`, efivars,
+`initrd=\initramfs`). Display, Phosh, Wi-Fi, USB, ADSP, modem fine; RAM as with booti.
+Test files on the phone's `/boot` (added by hand, nothing else changed): `EFI/BOOT/BOOTAA64.EFI` (from the Alpine
+`systemd-boot` apk, not installed), `loader/loader.conf`, `loader/entries/mainline-test.conf`, `mainline-test/{Image,dtb}`.
+
+Next: the `mojito-device` package (mainline kernel package installed for real, deviceinfo with the DTB, `systemd-boot`
+installed so `boot-deploy` writes `BOOTAA64.EFI` and the loader entry), `/boot` reformatted to FAT32 (ESP; back up first),
+U-Boot packaged and flashed to `boot_b` (keep a kernel boot image for rollback), then remove the test files.
 
 ## Workarounds still in place (the user wants as few as possible; fix causes, record any new shortcut)
 
