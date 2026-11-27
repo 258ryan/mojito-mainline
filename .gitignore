@@ -14,4 +14,3 @@ stock/
 downstream-dt/
 linux-*/
 !mainline/linux-postmarketos-qcom-sm6150/
-!downstream/linux-xiaomi-mojito/

@@ -20,11 +20,6 @@ Linux 7.4-rc4 with `sm6150-xiaomi-mojito.dts` on top of mainline's `talos.dtsi`,
 It is a development port. The device, kernel, firmware and U-Boot packages exist, but a clean install from them has not been
 tested yet (see "Build and install" below).
 
-## Downstream (`downstream/`)
-
-The earlier port on Xiaomi's 4.14 kernel: SSH over USB, a text console on the panel, touch, buttons, vibrator, flashlight and
-battery readouts. No audio, modem, Wi-Fi or GPU.
-
 ## Layout
 
 | Path | What |
