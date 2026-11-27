@@ -57,6 +57,14 @@ Lessons (each cost a freeze/boot):
   (UNATTACHED, MASTER_CLASH_DET) match the missing LPI mux, the wrong reset pin (it used TLMM 24) and the LPI mux bugs.
   Speaker/earpiece still need the AW87xxx amps (i2c3 0x58 / 0x5b, no mainline driver; stock init sequences are in the private dump).
   First boot: blacklist `pinctrl_sm6150_lpass_lpi` and load it by hand (the LPI/LPASS block can hang the SoC without its vote).
+- **Audio status 2026-11-27 (r25 + DT fixes on the phone):** LPI loads (vote 0x100f4 OK; un-vote 0x100f6 "Unknown cmd", harmless),
+  both SoundWire buses enumerate the WCD9375, card `X10` registers once the port tables have **7 entries** (controllers: TX 6 in + 1 out,
+  RX 1 in + 6 out; 5-entry tables -> RX "SWR bus clsh" + TX "Initialization not complete" -110). Headphone stream runs (no jack test yet).
+  **Speaker plays** with BOTH amps on, as Android does: EAR (RX0 -> INT0 -> RDAC3 -> EAR) + amp 0x5b (reset = TLMM gpio 83,
+  `gpioset -c gpiochip2 83=1`) and AUX (RX1 -> INT2 -> AUX) + amp 0x58; 0x58 alone was silent. Sound came from the bottom.
+  r26: patch 0016 `aw87xxx-seq` (DT register tables, DAPM on/off, "<prefix> PA Switch"), amps as card `aux-devs`.
+  Mic: capture gave a transient then exact zeros with the SM7150 "perf" TX timing; r26 DT uses stock `tx_frame_params_superset`
+  (si 3, lane 0; `techpack/audio/soc/swrm_port_config.h` in the downstream tree). RX timing already equals stock `rx_frame_params`.
 - **"battery over-voltage" dmesg flood** (charger, patch 0008): not an interrupt (bat-ov IRQ count 0) but the health getter printing
   each time UPower polls, while BATTERY_CHARGER_STATUS_2 has BAT_OV set. That happens when the battery sits above our 4.45 V float,
   e.g. after Android charged it to its 4.47 V (`qcom,fv-max-uv`). The cell rating is 4.45 V (`qcom,max-voltage-uv`, both cell
