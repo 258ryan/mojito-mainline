@@ -63,9 +63,9 @@ Needs: an unlocked Redmi Note 10 (mojito/sunny), `pmbootstrap`, `fastboot`. Repo
 git clone https://github.com/258ryan/mojito-mainline
 git clone https://github.com/258ryan/mojito-device
 git clone https://github.com/258ryan/firmware-xiaomi-mojito
-pmbootstrap init                      # vendor xiaomi, device mojito, UI phosh (any init once, to get pmaports)
+pmbootstrap init                      # channel edge; any device (e.g. qemu amd64), this only fetches pmaports
 mojito-device/tools/sync-to-pmaports.sh "$(pmbootstrap config aports)" mojito-mainline firmware-xiaomi-mojito/package
-pmbootstrap init                      # again: now picks up the mainline device-xiaomi-mojito
+pmbootstrap init                      # again: vendor xiaomi, device mojito (also for sunny), UI phosh
 pmbootstrap install --add u-boot-xiaomi-mojito
 
 # take the U-Boot image out of the installed system
