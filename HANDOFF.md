@@ -5,6 +5,13 @@ State as of 2026-11-27 (Wi-Fi work 2026-11-26/27).
 
 ## START HERE (2026-11-27, end of the long session): where things stand
 
+### Volume-up and vibration work (2026-11-27, verified by hand; phone boot_b = r27 Image + `r27/boot_b-r27-keys.img` DTB)
+- Volume-up is PM6150L (SID 4) GPIO 2; the DTS pointed at the PM6150's GPIO 2.
+- Vibrator: stock "lct-pwm-vibrator" = PM6150L LPG channel at 0xbc00 (pwm index 3, 50 us) out of PM6150L GPIO 6, enable TLMM 112;
+  mainline `pwm-vibrator` + `leds-qcom-lpg` (both modules). A 3 s full-strength rumble is felt; 0.15 s full and 0.4 s half-strength
+  pulses were not clearly felt, so Phosh haptic feedback may need a longer/stronger theme (not tested).
+- The package patch 0001 is regenerated (pkgrel 28, not built).
+
 ### Housekeeping done 2026-11-27 (evening)
 - `qbootctl` + `qbootctl-openrc` installed and in runlevel default (slot B `Successful: 1`): plain reboots no longer burn retries.
 - Greeter PulseAudio disabled: `mainline/rootfs/var/lib/greetd/.config/pulse/client.conf` (`autospawn = no`), install owned by greetd.

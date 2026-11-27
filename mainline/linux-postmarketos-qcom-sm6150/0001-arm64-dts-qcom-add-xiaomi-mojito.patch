@@ -16,7 +16,7 @@ diff -urN a/arch/arm64/boot/dts/qcom/Makefile b/arch/arm64/boot/dts/qcom/Makefil
  dtb-$(CONFIG_ARCH_QCOM)	+= sm6350-sony-xperia-lena-pdx213.dtb
 --- a/arch/arm64/boot/dts/qcom/sm6150-xiaomi-mojito.dts	1970-01-01 05:00:00.000000000 +0500
 +++ b/arch/arm64/boot/dts/qcom/sm6150-xiaomi-mojito.dts	2026-11-27 07:00:00.000000000 +0500
-@@ -0,0 +1,1461 @@
+@@ -0,0 +1,1499 @@
 +// SPDX-License-Identifier: BSD-3-Clause
 +/*
 + * Xiaomi Redmi Note 10 (mojito / sunny), SM6150 "Talos".
@@ -106,7 +106,7 @@ diff -urN a/arch/arm64/boot/dts/qcom/Makefile b/arch/arm64/boot/dts/qcom/Makefil
 +
 +		key-volume-up {
 +			label = "Volume Up";
-+			gpios = <&pm6150_gpios 2 GPIO_ACTIVE_LOW>;
++			gpios = <&pm6150l_gpios 2 GPIO_ACTIVE_LOW>;
 +			linux,code = <KEY_VOLUMEUP>;
 +			debounce-interval = <15>;
 +			linux,can-disable;
@@ -406,13 +406,51 @@ diff -urN a/arch/arm64/boot/dts/qcom/Makefile b/arch/arm64/boot/dts/qcom/Makefil
 +	};
 +};
 +
-+&pm6150_gpios {
++/* stock: the volume-up key and the vibrator PWM are on the PM6150L, not the PM6150 */
++&pm6150l_gpios {
 +	vol_up_n: vol-up-n-state {
 +		pins = "gpio2";
 +		function = "normal";
 +		power-source = <0>;
 +		bias-pull-up;
 +		input-enable;
++	};
++
++	vib_pwm_default: vib-pwm-state {
++		pins = "gpio6";
++		function = "func1";
++		power-source = <0>;
++		qcom,drive-strength = <3>;
++		drive-push-pull;
++		bias-disable;
++		output-low;
++	};
++};
++
++/* PWM channel at SPMI 0xbc00 (index 3) drives the vibration motor */
++&pm6150l_lpg {
++	status = "okay";
++};
++
++&tlmm {
++	vib_en_default: vib-en-state {
++		pins = "gpio112";
++		function = "gpio";
++		drive-strength = <2>;
++		bias-disable;
++		output-low;
++	};
++};
++
++/ {
++	/* stock "qcom,lct-pwm-vibrator": 50 us period, enable on TLMM 112 */
++	vibrator {
++		compatible = "pwm-vibrator";
++		pinctrl-names = "default";
++		pinctrl-0 = <&vib_en_default>, <&vib_pwm_default>;
++		pwms = <&pm6150l_lpg 3 50000>;
++		pwm-names = "enable";
++		enable-gpios = <&tlmm 112 GPIO_ACTIVE_HIGH>;
 +	};
 +};
 +
