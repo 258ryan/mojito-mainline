@@ -121,6 +121,7 @@ FAT32, flash `u-boot.img` to `boot_b`, remove the hand-copied test files and the
 | Wi-Fi and Bluetooth loaded by script, modules blacklisted | proper ordering in the drivers/services |
 | "No DSP request for 3 s" means the sensor PD is served | a real ready notification |
 | Plain wallpaper (the default JPEG XL one locks up the phone at login) | find why glycin-jxl exhausts memory into a hard lock-up |
+| Greeter PulseAudio `autospawn = no` (device package post-install) | hand the sound card from the greeter to the user session the pmOS way |
 | `aw87xxx-seq` amplifier driver replaying vendor register tables | load the vendor profiles in a mainline Awinic driver |
 | SMMU identity domain (0006), stopping the bootloader timing engine (0007) | upstreamable fixes |
 | hexagonrpcd patch not upstream | send it |
