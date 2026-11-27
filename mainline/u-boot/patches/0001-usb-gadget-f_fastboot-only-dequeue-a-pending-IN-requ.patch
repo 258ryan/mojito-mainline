@@ -1,0 +1,46 @@
+From 3654206f368ec46c286d1551500304145b7f5d00 Mon Sep 17 00:00:00 2001
+From: 258ryan <20981851+258ryan@users.noreply.github.com>
+Date: Fri, 27 Nov 2026 09:21:48 +0500
+Subject: [PATCH] usb: gadget: f_fastboot: only dequeue a pending IN request
+
+fastboot_tx_write() dequeues the IN request before queueing every
+response, also when the previous one completed long ago. On dwc3 that
+logs "request ... was not queued to ep1in-bulk" for every response.
+With CONFIG_CONSOLE_RECORD and "fastboot oem console" each of those
+lines is itself read back as a response, so the console never drains
+(over 11000 copies on a Redmi Note 10, SM6150).
+
+Dequeue only while the request is still in flight, and do it before
+the buffer of that request is overwritten.
+---
+ drivers/usb/gadget/f_fastboot.c | 11 +++++++++--
+ 1 file changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/usb/gadget/f_fastboot.c b/drivers/usb/gadget/f_fastboot.c
+index 8df0e3f3..7ccb9e5f 100644
+--- a/drivers/usb/gadget/f_fastboot.c
++++ b/drivers/usb/gadget/f_fastboot.c
+@@ -403,11 +403,18 @@ static int fastboot_tx_write(const char *buffer, unsigned int buffer_size)
+ 	struct usb_request *in_req = fastboot_func->in_req;
+ 	int ret;
+ 
++	/*
++	 * Cancel the previous response only if it is still in flight, and before its buffer
++	 * is overwritten. Dequeueing a completed request makes dwc3 log "request ... was not
++	 * queued", once per response; with console recording each of those lines is read back
++	 * by "oem console" as a new response, so the log never drains.
++	 */
++	if (in_req->status == -EINPROGRESS)
++		usb_ep_dequeue(fastboot_func->in_ep, in_req);
++
+ 	memcpy(in_req->buf, buffer, buffer_size);
+ 	in_req->length = buffer_size;
+ 
+-	usb_ep_dequeue(fastboot_func->in_ep, in_req);
+-
+ 	ret = usb_ep_queue(fastboot_func->in_ep, in_req, 0);
+ 	if (ret)
+ 		printf("Error %d on queue\n", ret);
+-- 
+2.43.0
+

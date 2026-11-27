@@ -64,6 +64,40 @@ cpu-1-2/3 cpu7). Stock's kernel trips are at 110 C but Android's thermal-engine 
 86 C at the end of the run. Sustained 2.5 min all-core load: big cluster steps down 2208 -> 2112 (once 2016) MHz and holds
 88-91 C; the little cluster stays at 1708.8 MHz. Not done: skin/battery temperature limits (only the SoC sensors are used).
 
+## U-Boot (IN PROGRESS, next task)
+
+Goal: the Xiaomi ABL chainloads generic upstream U-Boot (`qcom_defconfig` + `qcom-phone.config`, no mojito code) from
+`boot_b`; U-Boot boots the kernel from `/boot` the standard way, so kernel/DTB updates stop needing hand-packed boot images.
+Files: `mainline/u-boot/` (`build.sh`, config fragment `mojito.config`, `patches/`). Source: U-Boot v2026.10 (has QCS615
+clock/pinctrl, the UFS/QUSB2/dwc3/SMMU drivers match talos.dtsi; USB 3 PHY has none, U-Boot forces high-speed).
+
+Build: `mainline/u-boot/build.sh <u-boot v2026.10 git tree> <out> [debug]` (needs `gcc-aarch64-linux-gnu`; ~35 s), then
+`mk-bootimg-v2.sh <out>/u-boot-nodtb.bin <mojito dtb> <empty ramdisk> u-boot.img`. Test RAM-only: `fastboot boot u-boot.img`.
+`debug` starts fastboot at power-on (preboot), for `fastboot oem run:<cmd>` + `fastboot oem console`.
+
+Verified (RAM-only, nothing flashed), 2026-11-27:
+- ABL accepts the image; U-Boot runs; screen console via `cont_splash`; menu works with the keys; all 6 UFS LUNs found.
+- `blkmap` exposes the pmOS partition table nested in `userdata`: partition 1 = boot (ext4, ESP type GUID), 2 = root.
+  `blkmap create pmos; blkmap map pmos 0 <userdata blocks> linear scsi 0 <userdata start>` (4 KiB blocks; get both with
+  `part start/size scsi 0 userdata`), then `load blkmap 0:1 ...` works.
+- **Linux boots through U-Boot**: initramfs loaded from `blkmap 0:1 /initramfs`, r29 `Image` + r30 DTB sent with
+  `fastboot stage`, `booti`. Display, ADSP, modem, Wi-Fi, USB networking all fine; U-Boot supplies KASLR seed and initrd.
+  Linux sees 0x80000000-0x17dcfffff as RAM (3527 MB total): still to compare with a normal ABL boot.
+
+U-Boot problems found:
+1. Fixed (`patches/0001`): fastboot dequeued every completed IN request; dwc3 logs "was not queued" per reply, and with
+   console recording `oem console` reads those back forever. Upstream candidate.
+2. Restarting the USB gadget within one U-Boot boot fails (`dwc3 failed to enable ep0out`, `g_dnl_register -110`), e.g.
+   leaving fastboot and starting the serial gadget. Only the first USB session per boot works. Cause not found yet.
+3. Aborting a fastboot reply from the PC (killing `fastboot` mid-transfer) crashes U-Boot (NULL write in the
+   `dwc3_gadget_ep_dequeue` path). Never put `timeout` around `fastboot oem` commands.
+4. Stock 1 KiB pre-relocation console record buffer overflows; `mojito.config` enlarges it.
+
+Next: choose extlinux.conf (U-Boot native, `deviceinfo_generate_extlinux_config`) or EFI + systemd-boot (`boot-deploy`
+supports both; kernel has the EFI stub; ESP is ext4 today). Then a bootcmd that sets up the blkmap from `part start/size`
+and runs standard boot on it, put the mainline kernel/DTB in `/boot`, flash U-Boot to `boot_b` (keep a kernel boot image
+for rollback), and add it to the `mojito-device` package.
+
 ## Workarounds still in place (the user wants as few as possible; fix causes, record any new shortcut)
 
 | Workaround | Proper fix |
