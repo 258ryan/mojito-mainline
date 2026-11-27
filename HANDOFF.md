@@ -121,6 +121,10 @@ the `/lib/firmware/postmarketos` search path). Kernel updates are now just `apk 
 `/boot`; nothing to flash). The test files, `/usr/local/bin/hexagonrpcd-mojito`, `/etc/modprobe.d/ath10k-mojito.conf`
 and the hand-copied modules are gone.
 
+Through U-Boot the kernel has SMBIOS (`/sys/class/dmi/id`: vendor `xiaomi`, product `Xiaomi Redmi Note 10`), so ASoC
+names the card `xiaomi-XiaomiRedmiNote10` and UCM looks for `conf.d/sm8250/xiaomi-XiaomiRedmiNote10.conf` (device package
+pkgrel 2; the old name links to it). Without it PulseAudio shows only `auto_null`.
+
 Rescue: `build.sh <src> <out> ums` makes a U-Boot that exports `userdata` (= the pmOS disk image) to the PC as USB mass
 storage at power-on; `fastboot boot` it and the PC sees `pmOS_boot` + `pmOS_root` (fsck, mount, fix, unmount). A volume
 key press ends it and U-Boot boots on. `ums 0 blkmap 0` does not work (the phone resets to fastboot). Pack it with the DTB
