@@ -44,8 +44,17 @@ Item 3 VERIFIED (one run): 20 s s2idle with RTC wake: screen back, ADSP and mode
 2. **Modem stalls at boot, sometimes** (`DOG detects stalled initialization` ~48 s). Seen on several boots, with stock and
    patched hexagonrpcd. `mojito-wifi` had not started hexagonrpcd yet (it waits for QMI 69, which had not appeared). It
    usually recovers; once it crashed every ~40 s until a clean reboot. Cause unknown: compare good and bad boot timelines.
-3. **CPU capped at 1.59 / 1.9 GHz.** Every boot logs `Voltage update failed` for the OPPs up to 1.71 GHz (cpu0) and
-   2.21 GHz (cpu6).
+3. **CPU capped at 1.59 / 1.9 GHz (IN PROGRESS, next task).** Cause found: the cpufreq hardware table of this chip offers
+   1017600 and 1708800 kHz (cpu0) and 2016000, 2112000, 2208000 kHz (cpu6), but `talos.dtsi`'s `cpu0_opp_table` /
+   `cpu6_opp_table` (written for the slower QCS615) lack them, so `qcom-cpufreq-hw` rejects them ("Voltage update failed";
+   voltages come from the hardware table). Plan, DTS only (no kernel build), nothing applied yet:
+   - add those OPPs in the mojito DTS (`opp-peak-kBps`: 1017600 like 998400; the others like the table's top entry,
+     little `<(1017000 * 4) (1363200 * 16)>`, big `<(1555000 * 4) (1363200 * 16)>`);
+   - **first add thermal throttling**: the CPU zones (`cpuss-0..3`, `cpu-1-0..3`) have only a 115 C critical trip and no
+     cooling map, so nothing slows the CPU. Add a passive trip (~95 C, `polling-delay-passive`) with cooling maps
+     (`cpuss-*` -> cpu0-5, `cpu-1-*` -> cpu6-7; check that zone/core mapping);
+   - compare with `tools/cpubench.sh`. Baseline on pkgrel=29: big core 5.32 s, little core 14.87 s, all eight 38.73 s;
+     under load 1593600 / 1900800 kHz and 73 C (46 C at start).
 4. PC-port charging (add module parameters to the SMB5 driver to try register settings live; a bad setting can suspend USBIN
    until a replug). Stock leaves `0x1366 = 0x03` on an SDP; the driver writes `0x02`.
 5. Modem appears to ModemManager only ~30 s after boot.
