@@ -34,7 +34,7 @@ tested yet (see "Build and install" below).
 | `tools/` | install and debugging scripts |
 
 No firmware, boot images or device dumps are included: vendor files are not redistributable and dumps carry device-unique
-identifiers. Extract firmware from your own phone's stock ROM (see `tools/lpunpack.py`).
+identifiers. Build the firmware from the official stock ROM: [docs/firmware-from-stock.md](docs/firmware-from-stock.md).
 
 ## Credits
 

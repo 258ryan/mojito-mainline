@@ -11,8 +11,9 @@ long-term goal is Sailfish OS on this mainline kernel (kernel, DT, firmware and 
 
 Calls on top of the packaged install (WIP, not packaged yet), see "Calls: received audio" below for the why:
 1. Kernel: apply `mainline/wip/calls/q6voice-test-tree-on-r42.patch`, then `q6voice-probe-on-test-tree.patch`.
-2. Firmware: the voice calibration tables and `mojito-var_two.bin` topologies are generated from the stock ACDB on
-   your own machine (vendor data, not in this repo; see "Calls" below).
+2. Firmware: base firmware and the voice calibration tables + `mojito-var_two.bin` topologies, generated from the
+   official ROM on your own machine: [docs/firmware-from-stock.md](docs/firmware-from-stock.md)
+   (`tools/acdb/extract-voice-cal.sh vendor_a.img out/`).
 3. Audio backend PipeWire + WirePlumber, and start the user session at boot (fixes GNOME login racing the user
    D-Bus): `ln -s user /etc/init.d/user.user; rc-update add user.user default`.
 4. As root after each boot: `sh mainline/wip/calls/phone-setup/arm10.sh` (topology upload, no CVS session,
@@ -201,8 +202,8 @@ hard-coded, and `calibrate` defaults to on.
 - Files it reads from /lib/firmware (generated on the owner's machine from the stock database, vendor data, never commit):
   `mojito-voice-{columns,stream,devcfg,static,volume}.bin` for TX device 4 / RX device 7, and a topology list.
 - How the tables were made: Qualcomm's `libaudcal.so` (vendor image) loaded by a small static aarch64 loader under
-  qemu-aarch64, `acdb_ioctl` initialise 0x1138C, then 0x13097/6 static, 0x13095/4 "dynamic" (= volume), 0x11397 device
-  config, 0x13099/8 stream, 0x1309A column info (324 bytes). Loader kept privately.
+  qemu-aarch64 (now public: `tools/acdb/`), `acdb_ioctl` initialise 0x1138C, then 0x13097/6 static, 0x13095/4 "dynamic" (= volume), 0x11397 device
+  config, 0x13099/8 stream, 0x1309A column info (324 bytes).
 - Topology IDs come from database property 0x113af: earpiece (7) 0x1000fffd (works after upload), handset mic (4)
   0x10000003 (still rejected at commit; the mic uses SM_ECNS_V2 0x10F89, one channel).
 
