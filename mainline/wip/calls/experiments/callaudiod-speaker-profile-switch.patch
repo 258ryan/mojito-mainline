@@ -1,0 +1,96 @@
+callaudiod 0.1.99: switch the card profile (Voice Call Earpiece <-> Speaker) in call mode.
+EXPERIMENT, DID NOT WORK: the switch happens, but the downlink dies until hang-up (calls 26-28, see HANDOFF).
+
+diff --git a/src/cad-pulse.c b/src/cad-pulse.c
+index ba6f624..2376006 100644
+--- a/src/cad-pulse.c
++++ b/src/cad-pulse.c
+@@ -46,6 +46,13 @@ struct _CadPulse
+     gboolean has_voice_profile;
+     gchar *speaker_port;
+     gchar *earpiece_port;
++    /*
++     * PipeWire (and PulseAudio >= 15) give every UCM device its own mapping, so devices sharing a PCM (earpiece and
++     * speaker on most phones) end up in different "Voice Call" profiles instead of being ports of one sink: switching
++     * between them during a call is a profile switch.
++     */
++    gchar *voice_speaker_profile;
++    gchar *voice_earpiece_profile;
+ 
+     GHashTable *sink_ports;
+     GHashTable *source_ports;
+@@ -507,13 +514,50 @@ static void init_card_info(pa_context *ctx, const pa_card_info *info, int eol, v
+ 
+         if (g_str_has_prefix(profile->name, SND_USE_CASE_VERB_VOICECALL)) {
+             self->has_voice_profile = TRUE;
+-            if (info->active_profile2 == profile)
+-                self->audio_mode = CALL_AUDIO_MODE_CALL;
+-            else
+-                self->audio_mode = CALL_AUDIO_MODE_DEFAULT;
+             break;
+         }
+     }
++    if (self->has_voice_profile) {
++        /* any of several voice profiles may be the active one */
++        if (info->active_profile2 &&
++            g_str_has_prefix(info->active_profile2->name, SND_USE_CASE_VERB_VOICECALL))
++            self->audio_mode = CALL_AUDIO_MODE_CALL;
++        else
++            self->audio_mode = CALL_AUDIO_MODE_DEFAULT;
++    }
++
++    /* the voice profiles holding the speaker and the earpiece port, if they differ (see the struct) */
++    g_clear_pointer(&self->voice_speaker_profile, g_free);
++    g_clear_pointer(&self->voice_earpiece_profile, g_free);
++    for (i = 0; i < info->n_ports; i++) {
++        pa_card_port_info *port = info->ports[i];
++        gchar **target = NULL;
++        uint32_t best = 0;
++
++        if (port->direction != PA_DIRECTION_OUTPUT)
++            continue;
++        if (port->type == PA_DEVICE_PORT_TYPE_SPEAKER)
++            target = &self->voice_speaker_profile;
++        else if (port->type == PA_DEVICE_PORT_TYPE_EARPIECE || port->type == PA_DEVICE_PORT_TYPE_HANDSET)
++            target = &self->voice_earpiece_profile;
++        if (!target)
++            continue;
++        for (guint j = 0; j < port->n_profiles; j++) {
++            pa_card_profile_info2 *profile = port->profiles2[j];
++
++            if (!g_str_has_prefix(profile->name, SND_USE_CASE_VERB_VOICECALL) || !profile->available)
++                continue;
++            if (!*target || profile->priority > best) {
++                g_free(*target);
++                *target = g_strdup(profile->name);
++                best = profile->priority;
++            }
++        }
++    }
++    if (g_strcmp0(self->voice_speaker_profile, self->voice_earpiece_profile) == 0)
++        g_clear_pointer(&self->voice_speaker_profile, g_free);
++    g_debug("CARD:   voice speaker profile '%s', earpiece profile '%s'",
++            self->voice_speaker_profile, self->voice_earpiece_profile);
+ 
+     // We were able determine the current mode, set the corresponding D-Bus property
+     if (self->audio_mode != CALL_AUDIO_MODE_UNKNOWN)
+@@ -1077,6 +1121,19 @@ void cad_pulse_enable_speaker(gboolean enable, CadOperation *cad_op)
+     operation->op = cad_op;
+     operation->value = (guint)enable;
+ 
++    if (operation->pulse->audio_mode == CALL_AUDIO_MODE_CALL &&
++        operation->pulse->voice_speaker_profile && operation->pulse->voice_earpiece_profile) {
++        const gchar *target = enable ? operation->pulse->voice_speaker_profile :
++                                       operation->pulse->voice_earpiece_profile;
++
++        g_debug("switching to voice profile '%s'", target);
++        op = pa_context_set_card_profile_by_index(operation->pulse->ctx, operation->pulse->card_id, target,
++                                                  operation_complete_cb, operation);
++        if (op)
++            pa_operation_unref(op);
++        return;
++    }
++
+     op = pa_context_get_sink_info_by_index(operation->pulse->ctx,
+                                            operation->pulse->sink_id,
+                                            set_output_port, operation);
