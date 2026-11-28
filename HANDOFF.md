@@ -3,6 +3,23 @@
 State as of 2026-11-27, mainline Linux 7.4-rc4, kernel package `pkgrel=40`, device package 2-r5, hexagonrpcd-mojito r3, installed as a package and booted through U-Boot (`boot_b`) + systemd-boot. Read this file first.
 Older detail (how each thing was found, dead ends, reverse engineering): [`docs/HANDOFF-history.md`](docs/HANDOFF-history.md).
 
+## Update 2026-11-28: owner's phone back on stock; how to try calls
+
+The owner's phone was returned to stock MIUI 14 (V14.0.9.0.SKGMIXM) with a locked bootloader on 2026-11-28, so the
+author can no longer test on hardware. Everything below works on a phone installed as described here. The owner's
+long-term goal is Sailfish OS on this mainline kernel (kernel, DT, firmware and U-Boot are distro-neutral).
+
+Calls on top of the packaged install (WIP, not packaged yet), see "Calls: received audio" below for the why:
+1. Kernel: apply `mainline/wip/calls/q6voice-test-tree-on-r42.patch`, then `q6voice-probe-on-test-tree.patch`.
+2. Firmware: the voice calibration tables and `mojito-var_two.bin` topologies are generated from the stock ACDB on
+   your own machine (vendor data, not in this repo; see "Calls" below).
+3. Audio backend PipeWire + WirePlumber, and start the user session at boot (fixes GNOME login racing the user
+   D-Bus): `ln -s user /etc/init.d/user.user; rc-update add user.user default`.
+4. As root after each boot: `sh mainline/wip/calls/phone-setup/arm10.sh` (topology upload, no CVS session,
+   1-channel earpiece back end). Then calls work on the earpiece both ways.
+Known open: speaker during a call (any profile switch kills the downlink), earpiece volume fixed, media is mono while
+`rx0_channels=1` (needs a `RX_CODEC_DMA_RX_0 Channels` control), no Bluetooth call audio.
+
 ## Status
 
 | Area | State |
@@ -69,6 +86,102 @@ Goal: hear the other side. Calls connect and the microphone is heard; the earpie
   stream calibration on CVS (0x11369), device config (0x11371), static (0x11373) and volume tables (0x1307B) on CVP, then
   the RX volume step (0x112C2, rejected until the volume table was registered). Rejected here: 0x11374, 0x13079, 0x1307D.
 - Still silent with the stock earpiece chain 0x1000fffd + tables + volume step 4, with 2 RX channels and with 1.
+
+**Downlink probe results (2026-11-28, later)**: host-PCM level probe added to the test build (`pcm_probe`, `pcm_rate`,
+`probe_now` parameters of q6voice; event hook + no-wait send in q6voice-common; buffers at 64K in the calibration block;
+logs peak/RMS only). Results:
+- Call-free (hw:0,4 held open with libasound, `scripts/hold.py`, `cf.sh` in the private calls folder): TX tap 50 frames/s with
+  real mic levels; RX tap **no events at all** (any rx_channels, 8/16 kHz, topology 0x1000fffd or 0x10F77).
+- Real calls: routing is fine (UCM turns on `RX_CODEC_DMA_RX_0 Voice Mixer CS-Voice` and the TX capture mixer; hw:0,4 open at
+  8 kHz mono; PulseAudio also keeps MultiMedia1 at 2 ch/44.1 kHz on the same back end). Both taps nearly starve: TX gives the
+  first tick ~3 s after start, then ~5 events in 55 s; restarted mid-call (probe_now) it gives none for 15 s; RX never ticks.
+  So during a call the vocproc's processing loop hardly runs. (Session names and creation order match the vendor.)
+- **REFINED (call 8): the stall comes from the stream calibration table, not the CVS session.** With the CVS session
+  and its unmutes kept but `stream_cal=0` (new q6voice switch: skip VSS_ISTREAM_CMD_REGISTER_CALIBRATION_DATA_V2 0x11369)
+  the call runs and the mic is heard fully. Earpiece still silent with: stock 1-ch earpiece back end (new
+  snd_soc_sm8250 `rx0_channels=1` test parameter), vocproc 1 ch, topology 0x1000fffd + device tables + volume step 4; also
+  with no calibration, topology 0x10F77, 2 ch (sdm670-like). RX tap: still no events in any call.
+- **FOUND (call 5): our passive CVS session stalls the call** (see the refinement above).
+- **Calls 9-10: the RX side of the vocproc never runs in a call.** RX tap alone (`pcm_taps=2`) and with RX topology
+  0x10F77 (which surely has the default tap point): start accepted, 0 events, while the TX tap runs at 50 frames/s and
+  the far end hears the mic. So the downlink stops before or at the vocproc's RX input. Not the cause (checked): CVP V3
+  create layout and direction (2) match vendor; RX unmute (0x1138B dir 1) sent; port 0xB030; session names, creation
+  order and the absence of timing/media-type commands for CS calls match vendor and sdm670-mainline; codec DMA port
+  channels (1 or 2); PulseAudio holding the ports.
+- **Call 11 (kprobes on q6afe_port_start/stop, q6voice_start, q6cvp_session_create):** both ports run before the CVP
+  is created (PulseAudio starts 0xB030 with its ASM/ADM stream, q6voiced starts 0xB037), the CVP gets tx 0xB037 / rx
+  0xB030, and no port stops or restarts until hang-up. DAPM: `RX_CODEC_DMA_RX_0 Playback` On, stream active. So the AFE
+  RX port is running for the whole call; a port restart does not explain the idle RX vocproc. (q6voiced and hold.py
+  prepare twice; DPCM does not re-prepare a running back end, checked.)
+- **SOLVED in a test (call 12): received audio plays when PulseAudio is not on the earpiece port.** PulseAudio stopped
+  (autospawn off for the test), UCM "Voice Call" + Earpiece + Mic applied with alsaucm, so q6voiced's voice stream alone
+  started both codec DMA ports: the far end was heard in the earpiece (owner confirmed; mic heard too). In every
+  earlier call PulseAudio's MultiMedia1 stream (ASM + ADM COPP on RX_CODEC_DMA_RX_0) was on the port before the voice
+  path started, and the downlink never played. Settings: stream_cal=0, rx0_channels=1, vocproc 1 ch in/out, topology
+  0x1000fffd + device tables, volume step 4. NB the **RX host-PCM tap gives 0 events even with working downlink**: it is
+  useless on this firmware; only the TX tap is a valid health check. Speakerphone not tested (needs PulseAudio/callaudiod).
+  Open: is it the ADM stream's presence or only its order (ADM before the vocproc)? Test: with PulseAudio off, start
+  `aplay` on hw:0,0 during a call. Then fix properly (kernel or UCM, e.g. no MultiMedia1 route in the Voice Call verb).
+- **ROOT CAUSE (calls 13-17): the downlink plays only if the voice stream starts the RX codec DMA port.** PulseAudio's
+  Voice Call profile opens its MultiMedia1 sink on RX_CODEC_DMA_RX_0 ~20 ms before q6voiced opens the voice PCM, so the
+  port (0xB030) is started by the ADM stream and the voice downlink never plays. Not the cause: media joining later (call
+  13, aplay on hw:0,0 mid-call: no drop), closing PulseAudio's sink (14) or sink+source (15) mid-call, rebuilding the
+  vocproc mid-call with no PulseAudio stream open (16, new q6voice `restart_now` switch). Works (17, normal PulseAudio +
+  callaudiod): mid-call, suspend PulseAudio and stop q6voiced (port stops), reopen the voice PCM alone (scripts/hold.py),
+  resume PulseAudio: far end loud and clear, mic heard. Speaker shares the port, so anything playing when a call starts
+  (ringtone) would break it too: the fix belongs in the kernel (voice start must (re)start the AFE port) or in the
+  daemons (voice PCM first). Test recipe: calls-2026-11-28/scripts/watch17.sh (private).
+- **Kernel "HAL" attempt failed (calls 18-20).** New test code: `q6routing_port_suspend/resume` (close/reopen the ADM
+  streams on a port), `q6afe_dai_restart_port` (+ q6afe_dai `restart_port` parameter), q6voice `hal_reroute` (default on
+  in the installed test build: take ADM off the call's ports, restart them, start voice, reopen ADM). Runs as intended
+  at call start (call 18) and after answer with PulseAudio held off 2 s (call 19): still silent. Trace C (normal call,
+  12 payload words) vs trace B (working): AFE port config (0x100EF: 48 kHz, 16 bit, 1 ch, mask 1), ADM opens
+  (0x10326), CVP create identical word for word; codec digital mutes all released in both. So the DSP-side order is not
+  enough: what works is the whole back end (codec + SoundWire + DAPM + AFE) stopped and started again with the voice
+  stream first, i.e. the vendor HAL's device disable/enable. The place for that on Linux is userspace (callaudiod, which
+  already switches PulseAudio's profile at call start): keep PulseAudio's call sink/source suspended until q6voiced has
+  opened the voice PCM. Traces: phonelog/trace-{A,B,C}.txt (private).
+- **WORKS ON PIPEWIRE (calls 21-24, 2026-11-28 ~04:35):** switched the audio backend (`apk add
+  postmarketos-base-ui-audio-backend-pipewire`: removes PulseAudio, adds pipewire-pulse; back:
+  `...-backend-pulseaudio`) and enabled the user services (`rc-update --user add pipewire|wireplumber|pipewire-pulse
+  default`: pmOS did not enable them; without them GNOME Calls starts before PipeWire, libcallaudio fails to init and
+  Speaker/Mute are greyed out). Calls then play both ways with no hand steps. Trace D: WirePlumber switches to the Voice
+  Call profile at call setup and PipeWire reopens its streams ~5 s before q6voiced opens the voice PCM at answer; the
+  PulseAudio failure was the voice path starting ~20-30 ms after the port and ADM stream started (the "ADM first"
+  rule above is too strong; it is a start-up race or settling problem in the DSP).
+- **Needed settings for that:** `rx0_channels=1` (earpiece back end 1 channel, as stock in calls) and vocproc
+  `rx_channels=1 rx_speakers=1`; with a 2-channel back end the downlink is silent. But media needs 2 channels (earpiece
+  = left, bottom speaker = right). To do (no calls needed): a stock-style mixer control `RX_CODEC_DMA_RX_0 Channels`
+  (One/Two) in the machine driver, set to One by the Voice Call verb and Two by HiFi.
+- **OPEN: speakerphone in calls.** PipeWire puts Earpiece and Speaker in separate Voice Call profiles (one mapping per
+  UCM device; shared PCM -> separate profiles; ConflictingDevice does not change it), so the switch is a profile
+  switch. Stock callaudiod switches sink ports only (button does nothing); a patched callaudiod that switches profiles
+  (source in pmos-mojito/callaudiod-src, not installed any more) makes the switch happen, but the downlink then dies
+  until hang-up, also after switching back (mic keeps working). Trace E: at the switch PipeWire closes/reopens its ADM
+  streams; no AFE port or SoundWire restart when the voice PCM is held started (hold2.py, stop threshold = boundary);
+  with q6voiced (prepare only) the whole back end would stop. Reopening the voice PCM 1 s after the switch (call 27)
+  did not help. In-call speaker with a 1-channel port also needs `RX INT2_1 MIX1 INP0` = RX0 in the Voice Call Speaker
+  device. Next step: read wcd937x / SoundWire port handling on a route change during a running stream (no test calls).
+  Call 28 (2026-11-28 17:02, last speakerphone test): voice PCMs closed at the profile switch and reopened 5 s later
+  (start playback/capture 0) -> speaker still dead, mic fine. So it is NOT the reopen timing; parked as open.
+  Patched callaudiod removed again (stock restored), packaged UCM restored.
+- **Login race (packaging):** after the PipeWire user services were enabled (~/.config/rc/runlevels/default has only
+  pipewire, pipewire-pulse, wireplumber) GNOME login sometimes returns to the user picker: gnome-session starts before
+  the user D-Bus socket exists ("Failed to upload environment to DBus: Could not connect"), quits, and pam_openrc stops
+  the user services again. FIXED on the phone (2026-11-28 17:07): start the user session at boot, the standard OpenRC
+  way: `ln -s user /etc/init.d/user.user; rc-update add user.user default`. dbus/pipewire/wireplumber are up before
+  GDM; GNOME then uses that bus (DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/10000/bus), login worked first try.
+  To do: ship this in the device package (post-install for the default user).
+- **Earpiece volume during calls is not adjustable:** PulseAudio's sink volume does not reach the voice path (fixed CVP
+  volume step 4). Likely fix: UCM PlaybackMixerElem for the Voice Call devices on a codec gain (e.g. RX_RX0 Digital
+  Volume), or a mixer control for VSS_IVOLUME_CMD_SET_STEP.
+- **Superseded:** record an APR trace from stock Android during a call (the only reference left; needs stock booted, see
+  "The phone"), compare every voice packet incl. AFE commands sent around call start. Patch for all of the above:
+  `mainline/wip/calls/q6voice-probe-on-test-tree.patch` (on top of q6voice-test-tree-on-r42.patch). With `stream=0` (no CVS session, so no stream calibration
+  and no stream unmute; as sdm670-mainline, whose working driver never creates one) the vocproc runs the whole call at
+  50 frames/s and the far end hears the mic fully. With CVS it ran until the answer, then stalled (far end heard fragments).
+  PulseAudio holding the codec DMA ports (tested by suspending its sink/source mid-call) and the port channel counts made
+  no difference. The RX tap still never ticked, and the earpiece stayed silent (owner confirmed).
 
 **Untried leads, in suggested order**
 1. Measure the downlink inside the DSP: host PCM tap (VSS_IVPCM_CMD_START_V2 0x11339, NOTIFY 0x1133B, PUSH_BUFFER 0x1133A;

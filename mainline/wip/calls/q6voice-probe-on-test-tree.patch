@@ -1,0 +1,443 @@
+WIP, not a package patch. Applies on top of q6voice-test-tree-on-r42.patch (2026-11-28, later):
+- q6voice: host-PCM level probe (pcm_probe, pcm_rate, pcm_taps, probe_now; logs peak/RMS only, no audio kept)
+- q6voice: stream_cal switch, default off (the stream table 0x11369 stalls calls once the modem answers)
+- q6voice-common: event hook for unsolicited packets, q6voice_common_post() (send without waiting)
+- sm8250: rx0_channels test parameter (channel count of the RX_CODEC_DMA_RX_0 back end; stock: 1 for the earpiece)
+- q6voice: restart_now switch (rebuild the running voice path; test only)
+
+diff -ruN a/sound/soc/qcom/qdsp6/q6voice.c b/sound/soc/qcom/qdsp6/q6voice.c
+
+diff -ruN a/sound/soc/qcom/qdsp6/q6voice.c b/sound/soc/qcom/qdsp6/q6voice.c
+--- a/sound/soc/qcom/qdsp6/q6voice.c	2026-11-28 03:46:56.596497642 +0500
++++ b/sound/soc/qcom/qdsp6/q6voice.c	2026-11-28 04:10:52.904990521 +0500
+@@ -18,6 +18,7 @@
+ #include <linux/of_platform.h>
+ #include <linux/platform_device.h>
+ #include "q6voice-cal.h"
++#include <linux/math.h>
+ 
+ struct q6voice_path_runtime {
+ 	struct q6voice_session *sessions[Q6VOICE_SERVICE_COUNT];
+@@ -58,6 +59,8 @@
+  */
+ static bool calibrate = true;
+ module_param(calibrate, bool, 0644);
++static bool stream_cal;	/* default off: it stalls calls once the modem answers; the stream table on the CVS session (0x11369) */
++module_param(stream_cal, bool, 0644);
+ 
+ #define VSS_IMEMORY_CMD_MAP_PHYSICAL			0x00011334
+ #define VSS_IMEMORY_CMD_UNMAP				0x00011337
+@@ -93,14 +96,195 @@
+ 	u8 columns[CAL_COLUMNS];	/* not sent with the device configuration */
+ } __packed;
+ 
++/*
++ * TEST: host PCM taps (VSS_IVPCM) as level meters. The DSP copies 20 ms frames of the default TX and RX tap points into
++ * the calibration block (after the tables); only peak and RMS levels are logged, no audio is kept.
++ */
++static bool pcm_probe;
++module_param(pcm_probe, bool, 0644);
++static uint pcm_rate = 16000;	/* 0: automatic */
++module_param(pcm_rate, uint, 0644);
++static uint pcm_taps = 3;	/* bit 0: TX tap, bit 1: RX tap */
++module_param(pcm_taps, uint, 0644);
++
++#define VSS_IVPCM_CMD_START_V2			0x00011339
++#define VSS_IVPCM_CMD_STOP			0x0001100B
++#define VSS_IVPCM_EVT_PUSH_BUFFER_V2		0x0001133A
++#define VSS_IVPCM_EVT_NOTIFY_V2			0x0001133B
++#define VSS_IVPCM_TAP_POINT_TX_DEFAULT		0x00011289
++#define VSS_IVPCM_TAP_POINT_RX_DEFAULT		0x0001128A
++#define VSS_IVPCM_TAP_POINT_DIR_OUT		0
++#define VSS_IVPCM_NOTIFY_MASK_OUTPUT_BUFFER	1
++#define VSS_IVPCM_NOTIFY_MASK_TIMETICK		4
++#define VSS_IVPCM_PUSH_BUFFER_MASK_OUTPUT_BUFFER 1
++#define PCM_OFFSET	SZ_64K
++#define PCM_BUF		SZ_8K
++
++struct vss_vpcm_tap_point {
++	u32 tap_point;
++	u16 direction;
++	u16 sampling_rate;
++	u16 duration;
++} __packed;
++
++struct vss_vpcm_start_cmd {
++	struct apr_hdr hdr;
++	u32 mem_handle;
++	u32 num_tap_points;
++	struct vss_vpcm_tap_point tap_points[2];
++} __packed;
++
++struct vss_vpcm_notify {
++	u32 tap_point;
++	u32 notify_mask;
++	u64 out_buf_addr;
++	u64 in_buf_addr;
++	u16 filled_out_size;
++	u16 request_buf_size;
++	u16 sampling_rate;
++	u16 num_out_channels;
++} __packed;
++
++struct vss_vpcm_push_cmd {
++	struct apr_hdr hdr;
++	u32 tap_point;
++	u32 push_buf_mask;
++	u64 out_buf_mem_address;
++	u16 out_buf_mem_size;
++	u64 in_buf_mem_address;
++	u16 in_buf_mem_size;
++	u16 sampling_rate;
++	u16 num_in_channels;
++} __packed;
++
++struct q6voice_vpcm_stats {
++	unsigned int events, frames, errors, samples;
++	unsigned int peak, total_peak;
++	u64 sumsq;
++};
++
+ struct q6voice_cal {
+ 	struct device *dma_dev;
+ 	void *buf;
+ 	dma_addr_t dma;
+ 	u64 phys;
+ 	u32 handle;
++	struct q6voice_vpcm_stats st[2];	/* 0: TX, 1: RX */
+ };
+ 
++static const char *const vpcm_tap_name[2] = { "TX (mic)", "RX (downlink)" };
++
++static void q6voice_vpcm_event(struct q6voice_session *s, const struct apr_resp_pkt *data, void *priv)
++{
++	struct q6voice_cal *cal = priv;
++	const struct vss_vpcm_notify *n = data->payload;
++	struct vss_vpcm_push_cmd push = {};
++	struct q6voice_vpcm_stats *st;
++	size_t off;
++	int i;
++
++	if (data->hdr.opcode != VSS_IVPCM_EVT_NOTIFY_V2 || data->payload_size < sizeof(*n))
++		return;
++	if (n->tap_point == VSS_IVPCM_TAP_POINT_TX_DEFAULT)
++		i = 0;
++	else if (n->tap_point == VSS_IVPCM_TAP_POINT_RX_DEFAULT)
++		i = 1;
++	else
++		return;
++	st = &cal->st[i];
++	off = PCM_OFFSET + i * PCM_BUF;
++
++	if (!st->events++)
++		dev_info(s->dev, "vpcm %s: first event mask %#x, request %u bytes, rate %u, channels %u\n",
++			 vpcm_tap_name[i], n->notify_mask, n->request_buf_size, n->sampling_rate,
++			 n->num_out_channels);
++	if (!(n->notify_mask & VSS_IVPCM_NOTIFY_MASK_TIMETICK)) {
++		if (!st->errors++)
++			dev_info(s->dev, "vpcm %s: error notification, mask %#x\n", vpcm_tap_name[i], n->notify_mask);
++		return;
++	}
++
++	if (n->notify_mask & VSS_IVPCM_NOTIFY_MASK_OUTPUT_BUFFER) {
++		const s16 *pcm = cal->buf + off;
++		unsigned int k, count = min_t(unsigned int, n->filled_out_size, PCM_BUF) / 2;
++
++		for (k = 0; k < count; k++) {
++			unsigned int a = abs(pcm[k]);
++
++			st->peak = max(st->peak, a);
++			st->sumsq += a * a;
++		}
++		st->samples += count;
++		st->total_peak = max(st->total_peak, st->peak);
++		if (++st->frames % 50 == 0) {	/* about once a second */
++			dev_info(s->dev, "vpcm %s: frames %u, peak %u, rms %u (of 32767), rate %u, errors %u\n",
++				 vpcm_tap_name[i], st->frames, st->peak,
++				 st->samples ? (u32)int_sqrt64(st->sumsq / st->samples) : 0, n->sampling_rate,
++				 st->errors);
++			st->peak = 0;
++			st->sumsq = 0;
++			st->samples = 0;
++		}
++	}
++
++	push.hdr.opcode = VSS_IVPCM_EVT_PUSH_BUFFER_V2;
++	push.hdr.pkt_size = sizeof(push);
++	push.tap_point = n->tap_point;
++	push.push_buf_mask = VSS_IVPCM_PUSH_BUFFER_MASK_OUTPUT_BUFFER;
++	push.out_buf_mem_address = cal->phys + off;
++	push.out_buf_mem_size = min_t(unsigned int, ALIGN(n->request_buf_size, 128), PCM_BUF);
++	push.sampling_rate = n->sampling_rate;
++	push.num_in_channels = 1;
++	q6voice_common_post(s, &push.hdr);
++}
++
++static void q6voice_vpcm_start(struct device *dev, struct q6voice_cal *cal, struct q6voice_session *cvp)
++{
++	struct vss_vpcm_start_cmd cmd = {};
++	int ret, i;
++
++	memset(cal->st, 0, sizeof(cal->st));
++	memset(cal->buf + PCM_OFFSET, 0, 2 * PCM_BUF);
++	cvp->event_priv = cal;
++	cvp->event = q6voice_vpcm_event;
++
++	cmd.hdr.opcode = VSS_IVPCM_CMD_START_V2;
++	cmd.hdr.pkt_size = sizeof(cmd);
++	cmd.mem_handle = cal->handle;
++	for (i = 0; i < 2; i++) {
++		struct vss_vpcm_tap_point *tp = &cmd.tap_points[cmd.num_tap_points];
++
++		if (!(pcm_taps & BIT(i)))
++			continue;
++		tp->tap_point = i ? VSS_IVPCM_TAP_POINT_RX_DEFAULT : VSS_IVPCM_TAP_POINT_TX_DEFAULT;
++		tp->direction = VSS_IVPCM_TAP_POINT_DIR_OUT;
++		tp->sampling_rate = pcm_rate;
++		cmd.num_tap_points++;
++	}
++	cmd.hdr.pkt_size = offsetof(struct vss_vpcm_start_cmd, tap_points) +
++			   cmd.num_tap_points * sizeof(struct vss_vpcm_tap_point);
++	ret = q6voice_common_send(cvp, &cmd.hdr);
++	dev_info(dev, "vpcm start (rate %u, taps %#x): %d\n", pcm_rate, pcm_taps, ret);
++	if (ret)
++		cvp->event = NULL;
++}
++
++static void q6voice_vpcm_stop(struct device *dev, struct q6voice_cal *cal, struct q6voice_session *cvp)
++{
++	struct apr_pkt cmd = {};
++	int ret, i;
++
++	if (!cal || !cvp->event)
++		return;
++	cmd.hdr.opcode = VSS_IVPCM_CMD_STOP;
++	cmd.hdr.pkt_size = APR_HDR_SIZE;
++	ret = q6voice_common_send(cvp, &cmd.hdr);
++	cvp->event = NULL;
++	for (i = 0; i < 2; i++)
++		dev_info(dev, "vpcm %s: stop %d; events %u, frames %u, errors %u, loudest %u\n", vpcm_tap_name[i], ret,
++			 cal->st[i].events, cal->st[i].frames, cal->st[i].errors, cal->st[i].total_peak);
++}
++
+ static int q6voice_cal_one(struct device *dev, struct q6voice_cal *cal, struct q6voice_session *s, const char *name,
+ 			   u32 opcode, size_t offset, const struct firmware *columns)
+ {
+@@ -191,7 +375,7 @@
+ 		goto free;
+ 	cal->handle = mvm->map_handle;
+ 
+-	if (cvs)
++	if (cvs && stream_cal)
+ 		q6voice_cal_one(dev, cal, cvs, "mojito-voice-stream.bin",
+ 				VSS_ISTREAM_CMD_REGISTER_CALIBRATION_DATA_V2, SZ_4K, columns);
+ 	q6voice_cal_one(dev, cal, cvp, "mojito-voice-devcfg.bin", VSS_IVOCPROC_CMD_REGISTER_DEVICE_CONFIG, SZ_8K, NULL);
+@@ -309,6 +493,9 @@
+ 		goto start_err;
+ 	}
+ 
++	if (pcm_probe && p->runtime->cal)
++		q6voice_vpcm_start(dev, p->runtime->cal, cvp);
++
+ 	return ret;
+ 
+ start_err:
+@@ -367,6 +554,8 @@
+ 
+ 	dev_dbg(dev, "stop path %d\n", p->type);
+ 
++	q6voice_vpcm_stop(dev, p->runtime->cal, cvp);
++
+ 	ret = q6mvm_start(mvm, false);
+ 	if (ret)
+ 		dev_err(dev, "failed to stop voice: %d\n", ret);
+@@ -421,11 +610,86 @@
+ }
+ EXPORT_SYMBOL_GPL(q6voice_stop);
+ 
++/* TEST: start (1) or stop (0) the level probe on the running voice call: echo 1 > .../parameters/probe_now */
++static struct q6voice *q6voice_test_v;
++
++static int q6voice_probe_now_set(const char *val, const struct kernel_param *kp)
++{
++	struct q6voice *v = q6voice_test_v;
++	struct q6voice_path *p;
++	struct q6voice_session *cvp;
++	bool on;
++	int ret = kstrtobool(val, &on);
++
++	if (ret)
++		return ret;
++	if (!v)
++		return -ENODEV;
++	p = &v->paths[Q6VOICE_PATH_VOICE];
++	mutex_lock(&p->lock);
++	if (!p->runtime || p->runtime->started != 3 || !p->runtime->cal) {
++		ret = -ENOENT;
++		goto out;
++	}
++	cvp = p->runtime->sessions[Q6VOICE_SERVICE_CVP];
++	q6voice_vpcm_stop(v->dev, p->runtime->cal, cvp);
++	if (on)
++		q6voice_vpcm_start(v->dev, p->runtime->cal, cvp);
++out:
++	mutex_unlock(&p->lock);
++	return ret;
++}
++
++static const struct kernel_param_ops q6voice_probe_now_ops = {
++	.set = q6voice_probe_now_set,
++};
++module_param_cb(probe_now, &q6voice_probe_now_ops, NULL, 0200);
++
++/* TEST: tear the running voice path down and build it again: echo 1 > .../parameters/restart_now */
++static int q6voice_restart_now_set(const char *val, const struct kernel_param *kp)
++{
++	struct q6voice *v = q6voice_test_v;
++	struct q6voice_path *p;
++	int ret = 0;
++
++	if (!v)
++		return -ENODEV;
++	p = &v->paths[Q6VOICE_PATH_VOICE];
++	mutex_lock(&p->lock);
++	if (!p->runtime || p->runtime->started != 3) {
++		ret = -ENOENT;
++		goto out;
++	}
++	q6voice_path_stop(p);
++	q6voice_path_destroy(p);
++	p->runtime = kzalloc(sizeof(*p->runtime), GFP_KERNEL);
++	if (!p->runtime) {
++		ret = -ENOMEM;
++		goto out;
++	}
++	p->runtime->started = 3;
++	ret = q6voice_path_start(p);
++	dev_info(v->dev, "voice path restarted: %d\n", ret);
++	if (ret)
++		p->runtime->started = 0;
++out:
++	mutex_unlock(&p->lock);
++	return ret;
++}
++
++static const struct kernel_param_ops q6voice_restart_now_ops = {
++	.set = q6voice_restart_now_set,
++};
++module_param_cb(restart_now, &q6voice_restart_now_ops, NULL, 0200);
++
+ static void q6voice_free(void *data)
+ {
+ 	struct q6voice *v = data;
+ 	enum q6voice_path_type path;
+ 
++	if (q6voice_test_v == v)
++		q6voice_test_v = NULL;
++
+ 	for (path = 0; path < Q6VOICE_PATH_COUNT; ++path) {
+ 		struct q6voice_path *p = &v->paths[path];
+ 
+@@ -467,6 +731,7 @@
+ 	ret = devm_add_action(dev, q6voice_free, v);
+ 	if (ret)
+ 		return ERR_PTR(ret);
++	q6voice_test_v = v;
+ 
+ 	return v;
+ }
+diff -ruN a/sound/soc/qcom/qdsp6/q6voice-common.c b/sound/soc/qcom/qdsp6/q6voice-common.c
+--- a/sound/soc/qcom/qdsp6/q6voice-common.c	2026-11-28 03:46:56.599278447 +0500
++++ b/sound/soc/qcom/qdsp6/q6voice-common.c	2026-11-28 03:46:56.600491925 +0500
+@@ -180,8 +180,17 @@
+ 		return;
+ 	}
+ 
+-	if (data->hdr.opcode != APR_BASIC_RSP_RESULT)
++	if (data->hdr.opcode != APR_BASIC_RSP_RESULT) {
++		if (s->event)
++			s->event(s, data, s->event_priv);
+ 		return; /* Not handled here */
++	}
++
++	if (result->opcode == 0x0001133A) {	/* VSS_IVPCM_EVT_PUSH_BUFFER_V2: posted, nobody waits */
++		if (result->status)
++			dev_warn_ratelimited(s->dev, "push buffer failed: %#x\n", result->status);
++		return;
++	}
+ 
+ 	dev_dbg(s->dev, "basic result: opcode %#x, status: %#x\n",
+ 		result->opcode, result->status);
+@@ -268,6 +277,22 @@
+ }
+ EXPORT_SYMBOL_GPL(q6voice_common_query_version);
+ 
++/* send without waiting for the reply (usable from the callback) */
++int q6voice_common_post(struct q6voice_session *s, struct apr_hdr *hdr)
++{
++	int ret;
++
++	hdr->hdr_field = APR_HDR_FIELD(APR_MSG_TYPE_SEQ_CMD,
++				       APR_HDR_LEN(APR_HDR_SIZE), APR_PKT_VER);
++	hdr->src_port = s->port;
++	hdr->dest_port = s->handle;
++	hdr->token = 0;
++
++	ret = apr_send_pkt(s->svc->adev, (struct apr_pkt *)hdr);
++	return ret < 0 ? ret : 0;
++}
++EXPORT_SYMBOL_GPL(q6voice_common_post);
++
+ int q6voice_common_send(struct q6voice_session *s, struct apr_hdr *hdr)
+ {
+ 	unsigned long flags;
+diff -ruN a/sound/soc/qcom/qdsp6/q6voice-common.h b/sound/soc/qcom/qdsp6/q6voice-common.h
+--- a/sound/soc/qcom/qdsp6/q6voice-common.h	2026-11-28 03:46:56.601845063 +0500
++++ b/sound/soc/qcom/qdsp6/q6voice-common.h	2026-11-28 03:46:56.604003161 +0500
+@@ -29,6 +29,10 @@
+ 	u32 expected_opcode;
+ 	u32 result;
+ 	u32 map_handle;	/* from the last VSS_IMEMORY_RSP_MAP */
++
++	/* TEST: unsolicited events (host PCM notifications); called from the APR receive work */
++	void (*event)(struct q6voice_session *s, const struct apr_resp_pkt *data, void *priv);
++	void *event_priv;
+ };
+ 
+ int q6voice_common_probe(struct apr_device *adev, enum q6voice_service_type type);
+@@ -36,6 +40,7 @@
+ 
+ int q6voice_common_callback(struct apr_device *adev, const struct apr_resp_pkt *data);
+ int q6voice_common_send(struct q6voice_session *s, struct apr_hdr *hdr);
++int q6voice_common_post(struct q6voice_session *s, struct apr_hdr *hdr);
+ int q6voice_common_query_version(struct q6voice_session *s);
+ 
+ struct q6voice_session *q6voice_session_create(enum q6voice_service_type type,
+diff -ruN a/sound/soc/qcom/sm8250.c b/sound/soc/qcom/sm8250.c
+--- a/sound/soc/qcom/sm8250.c	2026-11-28 03:46:56.605592148 +0500
++++ b/sound/soc/qcom/sm8250.c	2026-11-28 03:46:56.607019840 +0500
+@@ -65,9 +65,15 @@
+ 
+ }
+ 
++/* TEST: channel count of the earpiece back end (RX_CODEC_DMA_RX_0); stock uses one for the earpiece. 0: two */
++static int rx0_channels;
++module_param(rx0_channels, int, 0644);
++
+ static int sm8250_be_hw_params_fixup(struct snd_soc_pcm_runtime *rtd,
+ 				     struct snd_pcm_hw_params *params)
+ {
++	struct snd_soc_dai *cpu = snd_soc_rtd_to_cpu(rtd, 0);
++
+ 	struct snd_interval *rate = hw_param_interval(params,
+ 					SNDRV_PCM_HW_PARAM_RATE);
+ 	struct snd_interval *channels = hw_param_interval(params,
+@@ -76,6 +82,8 @@
+ 
+ 	rate->min = rate->max = 48000;
+ 	channels->min = channels->max = 2;
++	if (rx0_channels > 0 && cpu->id == RX_CODEC_DMA_RX_0)
++		channels->min = channels->max = rx0_channels;
+ 	snd_mask_set_format(fmt, SNDRV_PCM_FORMAT_S16_LE);
+ 
+ 	return 0;
